@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use ekyc_domain::{CheckKind, Observation};
-use ekyc_http_transport::Transport;
-use ekyc_ports::{Provider, ProviderError};
+use ekyc_http_transport::{decode_json, Transport};
+use ekyc_ports::{Evaluated, Provider, ProviderError};
 use serde::{Deserialize, Serialize};
 
 pub struct FaceProvider {
@@ -49,18 +49,23 @@ impl Provider for FaceProvider {
         &self,
         evidence_ref: &str,
         operation_id: &str,
-    ) -> Result<Observation, ProviderError> {
+    ) -> Result<Evaluated<Observation>, ProviderError> {
         let input = Request {
             capture_ref: evidence_ref,
         };
-        let response: Response = self
+        let body = self
             .transport
-            .post(&self.endpoint, operation_id, &input)
+            .post_bytes(&self.endpoint, operation_id, &input)
             .await?;
-        Ok(Observation::Face {
+        self.decode(&body)
+    }
+
+    fn decode(&self, body: &[u8]) -> Result<Evaluated<Observation>, ProviderError> {
+        let reply: Evaluated<Response> = decode_json(body)?;
+        Ok(reply.map(|response| Observation::Face {
             passed: matches!(response.match_status, Status::Pass),
             confidence: response.confidence,
             similarity: response.similarity_score,
-        })
+        }))
     }
 }

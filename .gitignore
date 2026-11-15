@@ -3,3 +3,9 @@
 __pycache__/
 *.pyc
 *.sqlite3
+/apps/portal/node_modules/
+/apps/portal/dist/
+.pnpm-store/
+/.local-archive/
+.venv/
+/apps/portal/public/schema/

@@ -50,3 +50,9 @@ pub fn number(key: &str, default: u64, max: u64) -> Result<u64, Error> {
         Err(e) => Err(Error::new(ErrorKind::InvalidInput, e)),
     }
 }
+
+pub(crate) const INTERACTIVE_DEADLINE_MS: i64 = 60 * 60 * 1000;
+
+pub(crate) fn remaining_ms(deadline_ms: i64, now: chrono::DateTime<chrono::Utc>) -> u64 {
+    deadline_ms.saturating_sub(now.timestamp_millis()).max(0) as u64
+}

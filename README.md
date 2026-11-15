@@ -1,76 +1,91 @@
-# eKYC service
+# eKYC verification service
 
-A Rust service for opening verification cases, collecting four kinds of provider evidence, and issuing a scoped, auditable decision. Restate processes commands and recovers interrupted work. PostgreSQL serves reads, coordinates provider quotas and stores completion events. Four independent local HTTP vendors and a webhook inbox exercise the actual network boundaries.
+Wallet and lending integrations use one case API and one policy engine. A first-time loan applicant can open a lending case immediately. A returning wallet customer can supply the same institution-issued subject reference to reuse eligible ID and face checks. Every loan application requires its own sanctions screen and proof-of-address check.
 
-[Engineering design](docs/design.md) · [Provider fixtures](mocks/README.md) · [Webhook delivery](adapters/webhook-events/README.md)
+| Product | Use case | Required evidence and checks |
+| --- | --- | --- |
+| Wallet | `onboarding` | Document, face match and sanctions |
+| Wallet | `full_onboarding` | Document, face match, address and sanctions |
+| Wallet | `address_refresh` | Proof of address |
+| Lending | `loan_application` | Document and face (fresh or eligible for reuse), address and sanctions (fresh) |
 
-## Run the local stack
-
-Install Docker with Compose v2 and Python 3.10+. From the repository root run:
+## Run locally
 
 ```sh
-docker compose up --build -d
-python3 scripts/smoke.py
+docker compose --profile portal up --build -d
 ```
 
-The first build compiles the Rust workspace. Compose registers the worker with Restate before starting the API. The smoke test submits synthetic cases, polls decisions and verifies each terminal event reached the demo webhook. The API is at `http://127.0.0.1:8090`, Restate's local admin UI at `http://127.0.0.1:9070`, and the authenticated mock inbox at `http://127.0.0.1:8110`. Sample tokens in Compose are for this loopback demo.
+Podman Compose runs the same stack. Open the [verification portal](http://127.0.0.1:5173). **Scenario lab** opens cases, issues synthetic evidence and exercises provider and reviewer actions. **Overview** and **Cases** read the same scoped case data. The [API guide](http://127.0.0.1:5173/docs/) includes the interactive contract.
 
-### Submit a case
+The API listens on loopback port 8090, the local issuer on 9805, the webhook inbox on 8110 and Restate administration on 9070. Local product, reviewer and dashboard grants live in [the demo configuration](config/demo-clients.json). The portal proxy supplies its demo credentials on the server. The API guide uses the credential entered by its reader.
+
+To start a lending case before collecting evidence:
 
 ```sh
-curl -i http://127.0.0.1:8090/v1/cases \
-  -H 'Authorization: Bearer local-demo-onboarding' \
-  -H 'Idempotency-Key: first-case' \
+curl -i http://127.0.0.1:8090/v2/cases \
+  -H 'Authorization: Bearer local-demo-lending-product' \
+  -H 'Idempotency-Key: direct-loan-001' \
   -H 'Content-Type: application/json' \
-  --data '{"subject_ref":"synthetic-customer","purpose":"full_onboarding",
-    "evidence":{"document":"demo:pass","face":"demo:threshold",
-                "address":"demo:pass","sanctions":"demo:pass"}}'
+  --data '{"subject_ref":"customer-42","use_case":"loan_application"}'
 ```
 
-Follow the returned `Location` using the same bearer token. Once the case is `DECIDED`, this example returns `MANUAL_REVIEW` with `FACE_SIMILARITY_LOW`. For an approved case, use a new key and set the face reference to `demo:pass`. Reusing the first key with changed evidence returns HTTP 409. A different caller cannot read this case.
+Follow the returned location. Submit issuer references to its `/evidence` endpoint as the applicant completes the requirements. An approved lending case satisfies the verification policy; the lender owns underwriting.
+
+### Complete a first case
+
+From the repository root start the stack and run the copyable walkthrough with Python 3.10 or newer.
 
 ```sh
-curl -H 'Authorization: Bearer local-demo-onboarding' \
-  "http://127.0.0.1:8090/v1/cases/$CASE_ID"
+docker compose --profile portal up --build -d
+python3 scripts/first_case.py
 ```
 
-`docker compose down` stops the services and preserves the named data volumes. Use `docker compose logs -f worker webhook` for local diagnostics. A fresh empty database starts automatically from the checked-in migrations.
+The walkthrough creates a unique customer, opens a loan with no evidence, follows the returned location, issues a document, matching face capture and address, and polls the public API. Its final output shows verification `APPROVED` and four fresh `PASSED` checks. The lending product still owns underwriting. [Full executable request sequence](scripts/first_case.py) · [Issuer wire contract](apps/portal/public/issuer-contract.json) · [Presenter deck](workflow-orchestration/index.html)
 
-## Build and test
+## Staff and presenter walkthroughs
 
-The native stack was exercised with Rust 1.100, Restate Server 1.8.1, Restate Rust SDK 0.13.0 and PostgreSQL 17. The workspace commits its Cargo lockfile. Release images compile both Rust services and the independent webhook relay. The fixture tests require only Python.
+Open **Staff workspace** and sign in as `local-demo-reviewer-alice` or `local-demo-reviewer-sam` to investigate lending cases. The local observer credential is `local-demo-institution-observer`. The demo uses synthetic data. The institution supplies its own identities for staff deployments. [Staff intake and acknowledgement](docs/product-verification.md#staff-investigation-intake)
+
+The engineering talk opens with a lost provider reply. It follows ownership of the next step, durable waits, replay, overload and the point where recovery depends on the external service. The eKYC demo gives the audience a running workflow and an invocation journal to inspect. [Presenter deck on the default local port](http://127.0.0.1:5173/talk/)
+
+## Explore the database schema
+
+Open **Database schema** in the demo portal, or follow the link on the architecture slide. In Liam, search for `decision_outbox`, select the table, and inspect **Foreign key** to see how each published event refers to one `product_case_revision` by case ID and version. Select `provider_lease` to see how its dispatch records reference `provider_gate`. [Local Liam viewer](http://127.0.0.1:5173/schema/) · [Liam ERD](https://github.com/liam-hq/liam)
+
+The portal build generates the diagram from a schema-only PostgreSQL export. It currently shows nine application tables and five foreign-key constraints. The underlying SQL also defines the `staff_current_work` view. No case records or database credentials are needed to browse. [Schema source](apps/portal/schema/structure.sql)
+
+After applying migrations to a running demo, refresh the source and rebuild the portal. For a side-by-side deployment, set `COMPOSE_PROJECT_NAME` to its project name for both commands. With Podman, use `CONTAINER_ENGINE=podman make schema-refresh` and `podman compose`.
 
 ```sh
-cargo build --locked --workspace
-cargo test --locked --workspace
-python3 -m unittest discover -s mocks -v
+make schema-refresh
+docker compose --profile portal up -d --build --no-deps portal
 ```
 
-For SQL concurrency and fencing tests, use a disposable PostgreSQL database and a test DB user that can create databases:
+## Release verification
+
+Use Python 3.10 or newer, Rust with rustfmt and Clippy (the container build uses Rust 1.100), and Docker with Compose or Podman with a Compose provider. From the repository root run the following commands. A working container engine, free local ports and enough disk space for the images are required.
 
 ```sh
-cargo test --locked -p ekyc-postgres --features postgres-tests
+python3 -m venv .venv
+.venv/bin/python -m pip install -r scripts/requirements-qa.txt
+.venv/bin/python -m playwright install chromium
+make verify PYTHON=.venv/bin/python
 ```
 
-SQLx reads the connection from `DATABASE_URL`. A native integration harness is available for an already-running disposable Restate Server and PostgreSQL. It launches its own API, worker, relay, four vendors and inbox, then stops those application processes. Use a fresh Restate instance and database for this test. The default native ports must be free.
+`make test` runs the same release check. To use an installed Chrome or Chromium, set `EKYC_BROWSER_EXECUTABLE` to its executable instead of downloading Playwright’s Chromium. Set `CONTAINER_ENGINE=podman` to select Podman explicitly.
 
-```sh
-# DATABASE_URL points to your disposable local PostgreSQL database.
-# Restate ingress defaults to :8080 and admin to :9070.
-cargo build --locked --workspace
-bash scripts/native-smoke.sh
-# To exercise a real worker crash during provider I/O on Linux:
-EKYC_RECOVERY_TEST=1 bash scripts/native-smoke.sh
-```
+The check builds the service, mocks and portal, allocates its own database, host ports and Compose project, and removes that project when finished. It runs the all-feature Rust suite, mock and portal tests, real HTTP and webhook contract checks, archived-data migration, provider reconciliation, two staff browser journeys, deck navigation, the local schema diagram and its agreement with the database, credential rotation, dependency outages and a live worker restart. A failure returns a nonzero exit code. The last message on success is `Release checks passed, including the worker restart and both browser journeys.`
 
-## Repository layout
+For quick development feedback, `make unit` runs the default Rust, mock and portal tests with local dependencies. `make smoke` exercises a running local demo. [Engineering design](docs/design.md) · [Application contract](docs/product-verification.md) · [Migration and restore](docs/upgrade-and-reuse.md) · [Provider fixtures](mocks/README.md) · [Six reviews and implementation evidence](docs/next-iteration-review.md#development-iteration)
 
-| Path | Responsibility |
+## Repository
+
+| Directory | Responsibility |
 | --- | --- |
-| `crates/domain`, `crates/ports` | Verification policy, scope and evidence types, and the provider boundary |
-| `adapters/provider-{document,face,address,sanctions}` | One crate per provider, each with its own vendor protocol |
-| `crates/http-transport` | Connection pooling, timeouts, bounded bodies and HTTP error classification |
-| `adapters/restate`, `adapters/restate-ingress` | Command handlers and a separate caller-side ingress client |
-| `adapters/postgres`, `adapters/webhook-events` | Query projections, audit, shared limits, outbox and delivery |
-| `apps/http-api` | Authenticated command and query endpoints |
-| `mocks`, `scripts` | Synthetic vendor fixtures, webhook inbox, registration and integration tests |
+| `crates/domain` | Typed observations, case transitions and pinned verification policies |
+| `crates/ports`, `crates/http-transport` | Provider interfaces and bounded HTTP transport |
+| `adapters/provider-*` | Each vendor’s request, response and error mapping |
+| `adapters/restate`, `adapters/restate-ingress` | Durable workflows and the API-side command client |
+| `adapters/postgres`, `adapters/webhook-events` | Read projections, provider limits, audit history, outbox and delivery |
+| `apps/http-api`, `apps/portal` | Authenticated commands and reads, operator portal and reference |
+| `config`, `mocks`, `scripts` | Local demo grants, synthetic providers and integration exercises |

@@ -1,24 +1,16 @@
 //! PostgreSQL read models, an idempotent decision-event outbox, and shared dispatch limits.
-use chrono::{DateTime, NaiveDate, Utc};
-use ekyc_domain::{CheckKind, CheckSummary, Decision, Observation, Purpose};
+mod directory;
+mod investigations;
+pub use investigations::Investigation;
+mod reuse;
+mod upgrade;
+pub use reuse::ReuseQuery;
+mod product;
+pub use directory::{CaseFilter, CaseOverview, CasePage, CaseScope, HistoryPage, PageOrder};
+use ekyc_domain::CheckKind;
 use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgPoolOptions, types::Json, Error, PgPool};
-use std::{collections::BTreeMap, time::Duration};
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CaseView {
-    pub case_id: String,
-    pub version: i64,
-    pub state: String,
-    pub purpose: Purpose,
-    pub scope: Vec<CheckKind>,
-    pub checks: Vec<CheckSummary>,
-    pub observations: BTreeMap<CheckKind, Observation>,
-    pub decision: Option<Decision>,
-    pub policy_version: String,
-    pub evaluated_on: Option<NaiveDate>,
-    pub decided_at: Option<DateTime<Utc>>,
-}
+use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Gate {
@@ -75,76 +67,17 @@ impl Store {
             .acquire_timeout(Duration::from_secs(5))
             .connect(database_url)
             .await?;
-        sqlx::migrate!("./migrations").run(&pool).await?;
+        Self::from_pool(pool).await
+    }
+
+    pub async fn from_pool(pool: PgPool) -> Result<Self, Error> {
+        upgrade::migrate(&pool).await?;
         Ok(Self { pool })
     }
 
     pub async fn ready(&self) -> Result<(), Error> {
         sqlx::query("SELECT 1").execute(&self.pool).await?;
         Ok(())
-    }
-
-    pub async fn get(&self, case_id: &str) -> Result<Option<CaseView>, Error> {
-        let row: Option<Json<CaseView>> =
-            sqlx::query_scalar("SELECT snapshot FROM case_view WHERE case_id = $1")
-                .bind(case_id)
-                .fetch_optional(&self.pool)
-                .await?;
-        Ok(row.map(|value| value.0))
-    }
-
-    /// Apply one authoritative snapshot. The row lock implied by ON CONFLICT
-    /// serializes writers; replayed or outdated versions do not produce events.
-    pub async fn publish(&self, view: &CaseView) -> Result<(), Error> {
-        let mut tx = self.pool.begin().await?;
-        let changed = sqlx::query(
-            "INSERT INTO case_view (case_id, version, terminal, snapshot) VALUES ($1, $2, $3, $4)
-             ON CONFLICT (case_id) DO UPDATE SET
-                version = excluded.version, terminal = excluded.terminal, snapshot = excluded.snapshot
-             WHERE case_view.version < excluded.version AND NOT case_view.terminal",
-        )
-        .bind(&view.case_id)
-        .bind(view.version)
-        .bind(view.decision.is_some())
-        .bind(Json(view))
-        .execute(&mut *tx)
-        .await?;
-
-        if changed.rows_affected() == 1 {
-            sqlx::query(
-                "INSERT INTO case_revision (case_id, version, snapshot) VALUES ($1, $2, $3)",
-            )
-            .bind(&view.case_id)
-            .bind(view.version)
-            .bind(Json(view))
-            .execute(&mut *tx)
-            .await?;
-            if let Some(decision) = &view.decision {
-                let event_id = format!("{}:{}", view.case_id, view.version);
-                let event = serde_json::json!({
-                    "event_id": event_id,
-                    "event_type": "ekyc.case.decided.v1",
-                    "case_id": view.case_id,
-                    "version": view.version,
-                    "purpose": view.purpose,
-                    "scope": view.scope,
-                    "verdict": decision.verdict,
-                    "policy_version": view.policy_version,
-                    "decided_at": view.decided_at
-                });
-                sqlx::query(
-                    "INSERT INTO decision_outbox (event_id, case_id, version, payload)
-                     VALUES ($1, $2, $3, $4)",
-                )
-                .bind(event_id)
-                .bind(&view.case_id)
-                .bind(view.version)
-                .bind(event)
-                .execute(&mut *tx)
-                .await?;
-            }
-        }
-        tx.commit().await
     }
 
     pub async fn admit(&self, caller: &str, limit_per_minute: u32) -> Result<Gate, Error> {

@@ -2,3 +2,7 @@
 target
 **/__pycache__
 .env
+apps/portal
+.pnpm-store
+.local-archive
+.venv

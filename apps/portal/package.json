@@ -1,0 +1,27 @@
+{
+  "name": "ekyc-portal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "dev": "pnpm run build:schema && vite",
+    "build": "pnpm run build:schema && vite build",
+    "preview": "vite preview",
+    "test": "node --test test/*.test.mjs",
+    "build:schema": "liam erd build --format postgres --input schema/structure.sql --output-dir public/schema && node schema/local-assets.mjs"
+  },
+  "dependencies": {
+    "@fontsource-variable/dm-sans": "^5.2.6",
+    "@scalar/api-reference": "1.78.1",
+    "lucide-react": "^0.562.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-is": "^19.2.4",
+    "recharts": "^3.7.0"
+  },
+  "devDependencies": {
+    "@liam-hq/cli": "0.7.24",
+    "vite": "^7.3.1"
+  }
+}

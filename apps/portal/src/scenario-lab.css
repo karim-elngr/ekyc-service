@@ -1,0 +1,167 @@
+.scenario-launcher {
+  display: grid;
+  gap: 20px;
+  width: 100%;
+  max-width: 760px;
+  padding: clamp(18px, 3vw, 28px);
+}
+.scenario-launcher > .primary {
+  justify-self: start;
+  min-height: 42px;
+}
+.scenario-choice {
+  display: grid;
+  gap: 8px;
+}
+.scenario-launcher label {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 650;
+}
+.scenario-launcher select {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 12px;
+  font-size: 15px;
+  font-weight: 500;
+  background-color: white;
+  color: var(--ink);
+  border: 1px solid #b8c8c3;
+  border-radius: 7px;
+}
+.scenario-launcher select:disabled {
+  color: var(--muted);
+  background: #f3f6f5;
+}
+.scenario-choice p,
+.lab-active .waiting-loan p {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+.scenario-settings {
+  border-block: 1px solid var(--line);
+}
+.scenario-settings summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 50px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  list-style: none;
+}
+.scenario-settings summary:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+.scenario-settings summary::-webkit-details-marker {
+  display: none;
+}
+.scenario-settings summary small {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 450;
+  color: var(--muted);
+}
+.scenario-settings[open] .settings-chevron {
+  transform: rotate(180deg);
+}
+.scenario-settings fieldset {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 16px;
+  min-width: 0;
+  margin: 0;
+  padding: 8px 0 16px;
+  border: 0;
+}
+.scenario-field {
+  display: grid;
+  gap: 5px;
+}
+.scenario-settings label {
+  font-size: 13px;
+}
+.scenario-settings .scenario-reset {
+  margin-bottom: 14px;
+}
+.scenario-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.lab-active {
+  display: grid;
+  gap: 16px;
+}
+.lab-active .lab-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0;
+  padding: 14px 20px;
+}
+.lab-active .lab-toolbar h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 650;
+}
+.lab-active .lab-toolbar h2:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 4px;
+}
+.lab-active .lab-cases {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  align-items: start;
+}
+.lab-active .lab-cases:not(.pair) {
+  max-width: 790px;
+}
+.lab-active .lab-cases.pair {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.lab-active .lab-cases > article {
+  min-width: 0;
+  padding: clamp(14px, 2vw, 22px);
+}
+.lab-active .waiting-loan {
+  display: grid;
+  gap: 8px;
+  color: var(--green);
+}
+.lab-active .waiting-loan h2 {
+  color: var(--ink);
+  font-size: 18px;
+}
+@media (max-width: 1040px) {
+  .lab-active .lab-cases.pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 600px) {
+  .scenario-settings fieldset {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .scenario-launcher select {
+    font-size: 16px;
+  }
+  .scenario-launcher > .primary {
+    justify-self: stretch;
+  }
+  .lab-active .lab-toolbar {
+    padding: 14px;
+  }
+}

@@ -1,0 +1,44 @@
+:root {
+  --scalar-custom-header-height: 52px;
+  font-family: "DM Sans Variable", system-ui, sans-serif;
+}
+body {
+  margin: 0;
+}
+.guide-bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  box-sizing: border-box;
+  min-height: var(--scalar-custom-header-height);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 clamp(14px, 3vw, 36px);
+  background: #112f2a;
+  color: #f5fcf8;
+}
+.guide-bar a {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: inherit;
+  font-size: 13px;
+  font-weight: 580;
+  text-decoration: none;
+}
+.guide-bar a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.guide-bar a:focus-visible {
+  outline: 2px solid #9ce7be;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.guide-status {
+  margin: 32px;
+  font-size: 15px;
+}

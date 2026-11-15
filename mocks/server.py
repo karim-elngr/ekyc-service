@@ -2,38 +2,17 @@
 
 import argparse
 import json
+import os
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlsplit
 
-# Each server exposes just one contract, even when all four use the same image.
-ROUTES = {
-    "document": ("/documents/verify", "document_ref"),
-    "face": ("/faces/compare", "capture_ref"),
-    "address": ("/addresses/verify", "proof_ref"),
-    "sanctions": ("/screenings", "identity_ref"),
-}
-
-SHARED_FIXTURES = {
-    "pass", "review", "throttle-once", "timeout-once", "unavailable", "unavailable-once",
-}
-SPECIFIC_FIXTURES = {
-    "document": {"expired", "threshold"},
-    "face": {"threshold"},
-    "address": {"stale", "threshold"},
-    "sanctions": {"hit", "inconclusive"},
-}
-
-
-@dataclass(frozen=True)
-class Reply:
-    status: int
-    payload: dict
-    retry_after: str | None = None
-
+from fixtures import ROUTES, SPECIFIC_FIXTURES, Reply, outcome, supports
+from interactive import CASE_ID, InteractiveChecks
 
 @dataclass
 class Operation:
@@ -41,35 +20,8 @@ class Operation:
     attempts: int = 0
     terminal_reply: Reply | None = None
     cache_hits: int = 0
-
-
-def outcome(provider, scenario, today):
-    if provider == "document":
-        days_valid = -1 if scenario == "expired" else 365
-        return Reply(200, {
-            "status": "REVIEW" if scenario == "review" else "PASS",
-            "confidence": 85 if scenario == "threshold" else 98,
-            "expires_on": (today + timedelta(days=days_valid)).isoformat(),
-        })
-    if provider == "face":
-        return Reply(200, {
-            "match_status": "REVIEW" if scenario == "review" else "PASS",
-            "confidence": 95,
-            "similarity_score": 85.0 if scenario == "threshold" else 96.5,
-        })
-    if provider == "address":
-        age = 91 if scenario == "stale" else 10
-        return Reply(200, {
-            "status": "REVIEW" if scenario == "review" else "PASS",
-            "confidence": 80 if scenario == "threshold" else 96,
-            "proof_date": (today - timedelta(days=age)).isoformat(),
-        })
-    if scenario in {"inconclusive", "review"}:
-        return Reply(422, {"error": "screening_inconclusive"})
-    return Reply(200, {
-        "screening_status": "HIT" if scenario == "hit" else "CLEAR",
-        "match_count": 1 if scenario == "hit" else 0,
-    })
+    lookups: int = 0
+    release: threading.Event | None = None
 
 
 class ProviderServer(ThreadingHTTPServer):
@@ -78,16 +30,54 @@ class ProviderServer(ThreadingHTTPServer):
         self.timeout_delay = timeout_delay
         self.operations = {}
         self.operation_lock = threading.Lock()
+        # The production contract requires durable operation identity, including a
+        # definitive negative lookup. The demo uses the provider's mounted SQLite file.
+        db_path = os.environ.get("PROVIDER_DB_PATH", os.environ.get("INTERACTIVE_DB_PATH", ":memory:"))
+        self.results = sqlite3.connect(db_path, check_same_thread=False)
+        self.results.execute("""CREATE TABLE IF NOT EXISTS provider_results (
+            id TEXT PRIMARY KEY, evidence TEXT, status INTEGER, result TEXT, held INTEGER NOT NULL)""")
+        self.interactive = None
         super().__init__(address, Handler)
+        ingress = os.environ.get("RESTATE_INGRESS_URL")
+        if ingress:
+            db_path = os.environ.get("INTERACTIVE_DB_PATH", f"/tmp/ekyc-interactive-{provider}.sqlite3")
+            self.interactive = InteractiveChecks(db_path, ingress, provider)
+
+    def server_close(self):
+        if self.interactive:
+            self.interactive.close()
+        super().server_close()
+        self.results.close()
+
+    def choose_response(self, operation_id, payload):
+        if not isinstance(payload, dict) or set(payload) != {"response"} or not isinstance(payload["response"], str):
+            return 422, {"error": "invalid_response"}
+        response = payload["response"]
+        prefix, _, scenario = response.partition(":")
+        supported = {"pass", "review", "unavailable"} | SPECIFIC_FIXTURES[self.provider]
+        if prefix != "demo" or scenario not in supported or scenario in {"held-hit", "held-pass"}:
+            return 422, {"error": "unsupported_response"}
+        if scenario == "unavailable":
+            reply = Reply(503, {"error": "temporarily_unavailable"})
+        else:
+            reply = outcome(self.provider, scenario, datetime.now(timezone.utc))
+        return self.interactive.choose(operation_id, response, reply)
 
     def evaluate(self, operation_key, evidence_ref):
         prefix, separator, scenario = evidence_ref.partition(":")
-        valid = SHARED_FIXTURES | SPECIFIC_FIXTURES[self.provider]
-        if prefix != "demo" or not separator or scenario not in valid:
+        if prefix != "demo" or not separator or not supports(self.provider, scenario):
             return Reply(422, {"error": "unknown_fixture"}), 0.0
 
         with self.operation_lock:
             previous = self.operations.setdefault(operation_key, Operation(evidence_ref))
+            row = self.results.execute("SELECT evidence,status,result,held FROM provider_results WHERE id=?",
+                                       (operation_key,)).fetchone()
+            if row:
+                if row[0] != evidence_ref:
+                    return Reply(409, {"error": "operation_key_conflict"}), 0.0
+                previous.terminal_reply = Reply(row[1], json.loads(row[2]))
+                if row[3] and previous.release is None:
+                    previous.release = threading.Event()
             if previous.evidence_ref != evidence_ref:
                 return Reply(409, {"error": "operation_key_conflict"}), 0.0
             if previous.terminal_reply is not None:
@@ -102,10 +92,44 @@ class ProviderServer(ThreadingHTTPServer):
 
             # Save the answer before simulating a lost/slow response. A retry of
             # the logical operation can retrieve it while the first socket waits.
-            today = datetime.now(timezone.utc).date()
-            previous.terminal_reply = outcome(self.provider, scenario, today)
+            evaluated = datetime.now(timezone.utc)
+            if scenario in {"held-hit", "held-pass"}:
+                previous.release = threading.Event()
+            previous.terminal_reply = outcome(self.provider, scenario, evaluated)
+            with self.results:
+                self.results.execute("INSERT INTO provider_results VALUES(?,?,?,?,?)",
+                    (operation_key, evidence_ref, previous.terminal_reply.status,
+                     json.dumps(previous.terminal_reply.payload), int(previous.release is not None)))
             delay = self.timeout_delay if first and scenario == "timeout-once" else 0.0
             return previous.terminal_reply, delay
+
+    def release_held(self, op):
+        with self.operation_lock, self.results:
+            changed = self.results.execute(
+                "UPDATE provider_results SET held=0 WHERE id=? AND held=1", (op,)
+            ).rowcount
+            entry = self.operations.get(op)
+            if entry and entry.release:
+                entry.release.set()
+                return True
+            return bool(changed)
+
+    def screening_result(self, op):
+        with self.operation_lock, self.results:
+            row = self.results.execute("SELECT status,result,held FROM provider_results WHERE id=?", (op,)).fetchone()
+            if row is None:
+                # Fence delayed submissions for this key before declaring it never accepted.
+                self.results.execute("INSERT INTO provider_results VALUES(?,NULL,NULL,NULL,0)", (op,))
+            if not row or row[0] is None:
+                return Reply(200, {"status": "not_accepted"})
+            pending = self.operations.get(op)
+            if pending:
+                pending.lookups += 1
+            if row[2] and (pending is None or not pending.release or not pending.release.is_set()):
+                return Reply(200, {"status": "pending"})
+            if row[0] != 200:
+                return Reply(200, {"status": "inconclusive"})
+            return Reply(200, {"status": "complete", "result": json.loads(row[1])})
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -130,6 +154,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             self.reply(Reply(200, {"provider": self.server.provider, "status": "ok", "operation_inspection": True}))
+        elif self.path.startswith("/__mock__/interactive/") and self.server.interactive:
+            self.interactive_operation(self.server.interactive.read)
         elif self.path.startswith("/__mock__/operations/"):
             operation_key = unquote(self.path.removeprefix("/__mock__/operations/"))
             with self.server.operation_lock:
@@ -139,17 +165,43 @@ class Handler(BaseHTTPRequestHandler):
                     "attempts": operation.attempts,
                     "result_saved": operation.terminal_reply is not None,
                     "cache_hits": operation.cache_hits,
+                    **({"lookups": operation.lookups} if operation.lookups else {}),
+                    **({"awaiting_release": not operation.release.is_set()} if operation.release is not None else {}),
                 })
             self.reply(result)
         else:
             self.reply(Reply(404, {"error": "unknown_route"}))
 
+    def interactive_operation(self, handler, *args):
+        route = urlsplit(self.path)
+        case = unquote(route.path.removeprefix("/__mock__/interactive/"))
+        query = parse_qs(route.query, keep_blank_values=True)
+        operations = query.get("operation_id", [])
+        if (not CASE_ID.fullmatch(case) or set(query) != {"operation_id"} or len(operations) != 1
+                or not self.server.interactive.valid_operation(case, operations[0])):
+            return self.reply(Reply(404, {"error": "unknown_operation"}))
+        self.interactive_reply(handler, operations[0], *args)
+
+    def interactive_reply(self, action, *args):
+        try:
+            result = Reply(*action(*args))
+        except sqlite3.OperationalError:
+            result = Reply(503, {"error": "mock_storage_unavailable"})
+        self.reply(result)
+
     def do_POST(self):
+        if self.path.startswith("/__mock__/release/"):
+            operation_id = unquote(self.path.removeprefix("/__mock__/release/"))
+            if not self.server.release_held(operation_id):
+                return self.reply(Reply(404, {"error": "unknown_held_operation"}))
+            return self.reply(Reply(200, {"released": True}))
         path, input_field = ROUTES[self.server.provider]
-        if self.path != path:
+        interactive = self.path.startswith("/__mock__/interactive/") and self.server.interactive
+        lookup = self.server.provider == "sanctions" and self.path == "/screenings/result"
+        if self.path != path and not interactive and not lookup:
             return self.reply(Reply(404, {"error": "unknown_route"}))
         key = self.headers.get("Idempotency-Key", "").strip()
-        if not key or len(key) > 256:
+        if not interactive and (not key or len(key) > 256):
             return self.reply(Reply(400, {"error": "invalid_operation_key"}))
         try:
             size = int(self.headers.get("Content-Length", "0"))
@@ -158,12 +210,25 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(size))
         except (ValueError, UnicodeError, RecursionError):
             return self.reply(Reply(400, {"error": "invalid_json"}))
+        if lookup:
+            if not isinstance(payload, dict) or payload != {"operation_id": key}:
+                return self.reply(Reply(422, {"error": "invalid_lookup"}))
+            return self.reply(self.server.screening_result(key))
+        if interactive:
+            if self.path == "/__mock__/interactive/register":
+                return self.interactive_reply(interactive.register, payload)
+            return self.interactive_operation(self.server.choose_response, payload)
         if not isinstance(payload, dict) or set(payload) != {input_field}:
             return self.reply(Reply(422, {"error": "invalid_provider_payload"}))
         evidence_ref = payload[input_field]
         if not isinstance(evidence_ref, str):
             return self.reply(Reply(422, {"error": "invalid_evidence_reference"}))
         result, delay = self.server.evaluate(key, evidence_ref)
+        if result.status == 200 and evidence_ref in {"demo:held-hit", "demo:held-pass"}:
+            with self.server.operation_lock:
+                release = self.server.operations[key].release
+            if release and not release.wait(timeout=60):
+                return self.reply(Reply(503, {"error": "mock_release_timeout"}))
         if delay:
             time.sleep(delay)
         self.reply(result)

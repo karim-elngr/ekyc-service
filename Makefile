@@ -1,12 +1,21 @@
-.PHONY: up down smoke mocks test
+PYTHON ?= python3
+.PHONY: up down smoke mocks test verify unit schema-refresh
 up:
-	docker compose up --build -d
+	docker compose --profile portal up --build -d
 down:
-	docker compose down
+	docker compose --profile portal down
 smoke:
-	python3 scripts/smoke.py
+	$(PYTHON) scripts/product_smoke.py
+	$(PYTHON) scripts/interactive_smoke.py
+	$(PYTHON) scripts/queries_smoke.py
 mocks:
-	python3 -m unittest discover -s mocks -v
-test:
+	$(PYTHON) -m unittest discover -s mocks -v
+test: verify
+verify:
+	$(PYTHON) scripts/verify.py
+unit:
 	cargo test --locked --workspace
-	python3 -m unittest discover -s mocks -v
+	$(PYTHON) -m unittest discover -s mocks -v
+	cd apps/portal && pnpm test
+schema-refresh:
+	$(PYTHON) scripts/export_schema.py

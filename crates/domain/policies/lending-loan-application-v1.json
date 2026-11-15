@@ -1,0 +1,9 @@
+{
+  "product": "lending", "use_case": "loan_application", "version": "lending.loan_application.v1",
+  "checks": [
+    {"kind": "document", "methods": ["document_verification"], "min_confidence": 85, "reuse": {"source_products": ["wallet"], "max_age_days": 90}},
+    {"kind": "face", "methods": ["face_comparison"], "min_confidence": 85, "min_similarity": 85, "reuse": {"source_products": ["wallet"], "max_age_days": 90}},
+    {"kind": "address", "methods": ["address_verification"], "min_confidence": 80, "max_proof_age_days": 90},
+    {"kind": "sanctions", "methods": ["sanctions_screening"]}
+  ]
+}

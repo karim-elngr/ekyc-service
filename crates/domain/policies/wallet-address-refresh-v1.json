@@ -1,0 +1,6 @@
+{
+  "product": "wallet", "use_case": "address_refresh", "version": "wallet.address_refresh.v1",
+  "checks": [
+    {"kind": "address", "methods": ["address_verification"], "min_confidence": 80, "max_proof_age_days": 90}
+  ]
+}

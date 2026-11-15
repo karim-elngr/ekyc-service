@@ -1,4 +1,4 @@
-use ekyc_http_transport::Transport;
+use ekyc_http_transport::{decode_json, Transport};
 use ekyc_ports::{ProviderError, ProviderErrorKind};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -48,8 +48,9 @@ async fn post(
     let (url, server) = one_response(response, delay);
     let transport = Transport::new(timeout).unwrap();
     let result = transport
-        .post(&url, "case-7-check-3", &json!({"ref": "demo"}))
-        .await;
+        .post_bytes(&url, "case-7-check-3", &json!({"ref": "demo"}))
+        .await
+        .and_then(|bytes| decode_json(&bytes));
     (result, server.join().unwrap())
 }
 
@@ -71,6 +72,26 @@ async fn returns_rate_limit_and_forwards_operation_key() {
             retry_after_ms: Some(7000),
         }
     );
+}
+
+#[tokio::test]
+async fn asynchronous_registration_requires_an_explicit_acknowledgement() {
+    let transport = Transport::new(Duration::from_secs(3)).unwrap();
+    for (status, accepted) in [("202 Accepted", true), ("200 OK", false)] {
+        let (url, server) = one_response(
+            format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\n\r\n"),
+            Duration::ZERO,
+        );
+        let result = transport
+            .post_accepted(&url, "case/address", &json!({"case_id": "case"}))
+            .await;
+        assert_eq!(result.is_ok(), accepted);
+        assert!(server
+            .join()
+            .unwrap()
+            .to_lowercase()
+            .contains("idempotency-key: case/address"));
+    }
 }
 
 #[tokio::test]

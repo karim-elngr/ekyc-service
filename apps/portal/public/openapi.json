@@ -1,0 +1,2691 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "eKYC Integration Guide",
+    "version": "2.0.0",
+    "description": "Product-scoped verification cases, institution reporting, evidence, provider recovery and reviewer decisions."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8090",
+      "description": "Local eKYC HTTP API"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Service status",
+      "description": "Process, read and end-to-end command readiness probes, plus service counters."
+    },
+    {
+      "name": "Decision events",
+      "description": "Outbound delivery to a configured webhook receiver."
+    },
+    {
+      "name": "Product cases (v2)",
+      "description": "Product and reviewer grants scope reads and writes to their assigned institution and product."
+    },
+    {
+      "name": "Reporting",
+      "description": "Search and aggregate cases within the authenticated grant."
+    },
+    {
+      "name": "Live provider demo",
+      "description": "Local synthetic provider callbacks scoped to the owning product."
+    },
+    {
+      "name": "Investigation work",
+      "description": "Individually authenticated staff, outstanding reviews and late screening alerts."
+    }
+  ],
+  "paths": {
+    "/health/live": {
+      "get": {
+        "tags": [
+          "Service status"
+        ],
+        "operationId": "getLiveness",
+        "summary": "Check API liveness",
+        "description": "Checks that the HTTP process can answer.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The API process is responding. Empty body."
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "tags": [
+          "Service status"
+        ],
+        "operationId": "getReadiness",
+        "summary": "Check API readiness",
+        "description": "Checks PostgreSQL and calls the current worker through Restate. The worker performs an authenticated empty issuer lookup. Read-only clients can probe /health/reads.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Database, command registration, worker, and issuer are available."
+          },
+          "503": {
+            "description": "At least one required command dependency is unavailable."
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "Service status"
+        ],
+        "operationId": "getMetrics",
+        "summary": "Read service counters",
+        "description": "Four Prometheus text counters track accepted submissions (including replays), admission throttles, dependency failures and successful case reads (including lists). They reset when this API process restarts.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Prometheus text exposition, version 0.0.4.",
+            "content": {
+              "text/plain; version=0.0.4": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "ekyc_accepted_requests_total 14\nekyc_admission_throttled_total 1\nekyc_dependency_failures_total 0\nekyc_case_reads_total 38\n"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v2/cases": {
+      "post": {
+        "tags": [
+          "Product cases (v2)"
+        ],
+        "operationId": "openProductCase",
+        "summary": "Open a product case",
+        "description": "A product credential selects the policy by use_case. On a loan for an existing wallet customer, send the same subject_ref and omit evidence to evaluate eligible prior observations.",
+        "security": [
+          {
+            "callerBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Stable per logical command. Replay its original body and key after an uncertain result.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[!-~]+$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductOpen"
+              },
+              "examples": {
+                "loan": {
+                  "summary": "Loan after wallet onboarding",
+                  "value": {
+                    "subject_ref": "synthetic-customer",
+                    "use_case": "loan_application"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/ProductAccepted"
+          },
+          "400": {
+            "$ref": "#/components/responses/Product400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Product401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Product403"
+          },
+          "409": {
+            "$ref": "#/components/responses/Product409"
+          },
+          "413": {
+            "$ref": "#/components/responses/Product413"
+          },
+          "415": {
+            "$ref": "#/components/responses/Product415"
+          },
+          "422": {
+            "$ref": "#/components/responses/Product422"
+          },
+          "429": {
+            "$ref": "#/components/responses/Product429"
+          },
+          "503": {
+            "$ref": "#/components/responses/Product503"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Reporting"
+        ],
+        "operationId": "listProductCases",
+        "summary": "List verification cases",
+        "description": "Returns a stable page of cases and the total matching the same filters. Product credentials see their own cases. Observer and reviewer reads use their configured scopes.",
+        "security": [
+          {
+            "callerBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "Inclusive creation time. Defaults to seven days before the end."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "Exclusive creation time. Defaults to now. Maximum window is 366 days."
+          },
+          {
+            "name": "product",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "One product within the authenticated grant."
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ProductState"
+            },
+            "description": ""
+          },
+          {
+            "name": "use_case",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "description": "Case-insensitive substring of case or subject reference."
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "created_at_desc",
+                "created_at_asc"
+              ],
+              "default": "created_at_desc"
+            },
+            "description": "Creation time, then case ID for ties."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            },
+            "description": "Maximum supported offset is 10,000."
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "description": ""
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductCasePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidQuery"
+          },
+          "401": {
+            "$ref": "#/components/responses/Product401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Product403"
+          },
+          "503": {
+            "$ref": "#/components/responses/Product503"
+          }
+        }
+      }
+    },
+    "/v2/cases/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ProductCaseId"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Product cases (v2)"
+        ],
+        "operationId": "readProductCase",
+        "summary": "Read a product case",
+        "description": "The owning product, assigned reviewer or authorized observer can read the case's pinned policy version, check outcomes, provenance and next action.",
+        "security": [
+          {
+            "callerBearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current authorized view.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductCaseView"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Product401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Product403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Product404"
+          },
+          "503": {
+            "$ref": "#/components/responses/Product503"
+          }
+        }
+      }
+    },
+    "/v2/cases/{id}/evidence": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ProductCaseId"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Product cases (v2)"
+        ],
+        "operationId": "submitProductEvidence",
+        "summary": "Submit requested evidence",
+        "description": "Use an issuer reference bound to the institution and subject. A correction needs new evidence. The case ID stays the same.",
+        "security": [
+          {
+            "callerBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Stable per logical command. Replay its original body and key after an uncertain result.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[!-~]+$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductEvidenceSubmission"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/ProductAccepted"
+          },
+          "400": {
+            "$ref": "#/components/responses/Product400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Product401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Product403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Product404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Product409"
+          },
+          "413": {
+            "$ref": "#/components/responses/Product413"
+          },
+          "415": {
+            "$ref": "#/components/responses/Product415"
+          },
+          "422": {
+            "$ref": "#/components/responses/Product422"
+          },
+          "429": {
+            "$ref": "#/components/responses/Product429"
+          },
+          "503": {
+            "$ref": "#/components/responses/Product503"
+          }
+        }
+      }
+    },
+    "/v2/cases/{id}/retry": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ProductCaseId"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Product cases (v2)"
+        ],
+        "operationId": "retryProductCheck",
+        "summary": "Retry a blocked check",
+        "description": "The product caller requests a fresh attempt for the blocked check. Inspect its new operation ID on the case.",
+        "security": [
+          {
+            "callerBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Stable per logical command. Replay its original body and key after an uncertain result.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[!-~]+$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductRetry"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/ProductAccepted"
+          },
+          "400": {
+            "$ref": "#/components/responses/Product400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Product401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Product403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Product404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Product409"
+          },
+          "413": {
+            "$ref": "#/components/responses/Product413"
+          },
+          "415": {
+            "$ref": "#/components/responses/Product415"
+          },
+          "422": {
+            "$ref": "#/components/responses/Product422"
+          },
+          "429": {
+            "$ref": "#/components/responses/Product429"
+          },
+          "503": {
+            "$ref": "#/components/responses/Product503"
+          }
+        }
+      }
+    },
+    "/v2/cases/{id}/review": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ProductCaseId"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Product cases (v2)"
+        ],
+        "operationId": "readProductReview",
+        "summary": "Read reviewer evidence and history",
+        "description": "Requires the assigned institution and product reviewer role. Checks with observations include their original provider, operation, evidence reference, and revision.",
+        "security": [
+          {
+            "callerBearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current authorized view.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductReviewerView"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Product401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Product403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Product404"
+          },
+          "503": {
+            "$ref": "#/components/responses/Product503"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Product cases (v2)"
+        ],
+        "operationId": "resolveProductReview",
+        "summary": "Record a sanctions disposition",
+        "description": "The assigned reviewer supplies the current screening operation ID, decision, investigation reference and reason. An outdated operation returns 409.",
+        "security": [
+          {
+            "callerBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Stable per logical command. Replay its original body and key after an uncertain result.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[!-~]+$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductReview"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/ProductAccepted"
+          },
+          "400": {
+            "$ref": "#/components/responses/Product400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Product401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Product403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Product404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Product409"
+          },
+          "413": {
+            "$ref": "#/components/responses/Product413"
+          },
+          "415": {
+            "$ref": "#/components/responses/Product415"
+          },
+          "422": {
+            "$ref": "#/components/responses/Product422"
+          },
+          "429": {
+            "$ref": "#/components/responses/Product429"
+          },
+          "503": {
+            "$ref": "#/components/responses/Product503"
+          }
+        }
+      }
+    },
+    "/v2/cases/overview": {
+      "get": {
+        "tags": [
+          "Reporting"
+        ],
+        "operationId": "productOverview",
+        "summary": "Summarize verification activity",
+        "description": "Aggregates the entire filtered population. Each check contributes to its actual status and provenance category.",
+        "security": [
+          {
+            "callerBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "Inclusive creation time. Defaults to seven days before the end."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "Exclusive creation time. Defaults to now. Maximum window is 366 days."
+          },
+          {
+            "name": "product",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "One product within the authenticated grant."
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ProductState"
+            },
+            "description": ""
+          },
+          {
+            "name": "use_case",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "description": "Case-insensitive substring of case or subject reference."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductOverview"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidQuery"
+          },
+          "401": {
+            "$ref": "#/components/responses/Product401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Product403"
+          },
+          "503": {
+            "$ref": "#/components/responses/Product503"
+          }
+        }
+      }
+    },
+    "/v2/cases/{id}/history": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ProductCaseId"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Reporting"
+        ],
+        "operationId": "readProductHistory",
+        "summary": "Read case revision history",
+        "description": "Reads public, newest-first revision snapshots within the same case scope.",
+        "security": [
+          {
+            "callerBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "before_version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "description": "Exclusive cursor; omit for the newest revisions."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "description": ""
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "Inclusive revision recording time. Maximum bounded window is 366 days."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "Exclusive revision recording time. Omit both bounds to include all history."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductHistory"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidQuery"
+          },
+          "401": {
+            "$ref": "#/components/responses/Product401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Product403"
+          },
+          "503": {
+            "$ref": "#/components/responses/Product503"
+          },
+          "404": {
+            "$ref": "#/components/responses/Product404"
+          }
+        }
+      }
+    },
+    "/v2/cases/{id}/interactive": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ProductCaseId"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Live provider demo"
+        ],
+        "operationId": "readProductCallbacks",
+        "summary": "Read live provider callbacks",
+        "description": "The owning product can inspect active synthetic checks, original operation IDs and Restate invocation links.",
+        "security": [
+          {
+            "callerBearer": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Authorized response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductLivePanel"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Product400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Product401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Product403"
+          },
+          "503": {
+            "$ref": "#/components/responses/Product503"
+          },
+          "404": {
+            "$ref": "#/components/responses/Product404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Product409"
+          }
+        }
+      }
+    },
+    "/v2/cases/{id}/interactive/{kind}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ProductCaseId"
+          }
+        },
+        {
+          "name": "kind",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/CheckKind"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Live provider demo"
+        ],
+        "operationId": "sendProductCallback",
+        "summary": "Submit a live provider response",
+        "description": "Only the owning product can answer a pending local synthetic check. Resending the same outcome for the same operation is safe. A conflicting response or stale operation returns 409. Common choices are demo:pass, demo:review, and demo:unavailable. Document also supports demo:expired and demo:threshold, face adds demo:threshold, address adds demo:stale and demo:threshold, and sanctions adds demo:hit and demo:inconclusive.",
+        "security": [
+          {
+            "callerBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "operation_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact operation ID for the current check."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "response"
+                ],
+                "properties": {
+                  "response": {
+                    "type": "string",
+                    "examples": [
+                      "demo:pass",
+                      "demo:review",
+                      "demo:unavailable"
+                    ],
+                    "enum": [
+                      "demo:pass",
+                      "demo:review",
+                      "demo:unavailable",
+                      "demo:expired",
+                      "demo:threshold",
+                      "demo:stale",
+                      "demo:hit",
+                      "demo:inconclusive"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "400": {
+            "$ref": "#/components/responses/Product400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Product401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Product403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Product404"
+          },
+          "409": {
+            "$ref": "#/components/responses/Product409"
+          },
+          "413": {
+            "$ref": "#/components/responses/Product413"
+          },
+          "415": {
+            "$ref": "#/components/responses/Product415"
+          },
+          "422": {
+            "$ref": "#/components/responses/Product422"
+          },
+          "503": {
+            "$ref": "#/components/responses/Product503"
+          },
+          "200": {
+            "description": "An identical callback was already recorded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductCallbackReceipt"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Callback accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductCallbackReceipt"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/reads": {
+      "get": {
+        "tags": [
+          "Service status"
+        ],
+        "operationId": "getReadAvailability",
+        "summary": "Check case read availability",
+        "description": "Runs a PostgreSQL query through the API connection pool.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The database query succeeded. Empty body."
+          },
+          "503": {
+            "description": "The database query failed. Empty body."
+          }
+        }
+      }
+    },
+    "/v2/staff/session": {
+      "get": {
+        "tags": [
+          "Investigation work"
+        ],
+        "security": [
+          {
+            "callerBearer": []
+          }
+        ],
+        "operationId": "getStaffSession",
+        "summary": "Identify the authenticated staff grant",
+        "responses": {
+          "200": {
+            "description": "Identify the authenticated staff grant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaffSession"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Product401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Product403"
+          }
+        }
+      }
+    },
+    "/v2/investigations": {
+      "get": {
+        "tags": [
+          "Investigation work"
+        ],
+        "security": [
+          {
+            "callerBearer": []
+          }
+        ],
+        "operationId": "listInvestigations",
+        "summary": "List scoped review and late-alert work across all case ages",
+        "responses": {
+          "200": {
+            "description": "List scoped review and late-alert work across all case ages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvestigationPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Product401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Product403"
+          },
+          "503": {
+            "$ref": "#/components/responses/Product503"
+          },
+          "400": {
+            "description": "The status, cursor or limit is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductError"
+                },
+                "example": {
+                  "error": "invalid_queue_filter"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "open",
+                "acknowledged"
+              ],
+              "default": "open"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            }
+          }
+        ]
+      }
+    },
+    "/v2/investigations/acknowledgement": {
+      "put": {
+        "tags": [
+          "Investigation work"
+        ],
+        "security": [
+          {
+            "callerBearer": []
+          }
+        ],
+        "operationId": "acknowledgeInvestigation",
+        "summary": "Record the first authenticated reviewer's acknowledgement",
+        "responses": {
+          "200": {
+            "description": "Record the first authenticated reviewer's acknowledgement",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Investigation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON or invalid work ID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductError"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Product401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Product403"
+          },
+          "404": {
+            "description": "The work item is unavailable to this credential.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductError"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/Product413"
+          },
+          "415": {
+            "$ref": "#/components/responses/Product415"
+          },
+          "422": {
+            "$ref": "#/components/responses/Product422"
+          },
+          "503": {
+            "$ref": "#/components/responses/Product503"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "work_id"
+                ],
+                "properties": {
+                  "work_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "webhooks": {
+    "ekyc.case.action.v2": {
+      "post": {
+        "tags": [
+          "Decision events"
+        ],
+        "operationId": "receiveProductAction",
+        "summary": "Receive a product case update",
+        "description": "At-least-once delivery to the configured internal receiver. Deduplicate by event_id (case_id:version). Case revisions may arrive out of order.",
+        "security": [
+          {
+            "webhookBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Matches event_id in the body.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductActionEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Durably accepted or recognized as a duplicate."
+          },
+          "default": {
+            "description": "Retry with backoff."
+          }
+        }
+      }
+    },
+    "ekyc.case.decided.v2": {
+      "post": {
+        "tags": [
+          "Decision events"
+        ],
+        "operationId": "receiveProductDecision",
+        "summary": "Receive a product decision",
+        "description": "At-least-once delivery to the configured internal receiver. Deduplicate by event_id (case_id:version). Case revisions may arrive out of order.",
+        "security": [
+          {
+            "webhookBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Matches event_id in the body.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductDecidedEvent"
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Durably accepted or recognized as a duplicate."
+          },
+          "default": {
+            "description": "Retry with backoff."
+          }
+        }
+      }
+    },
+    "ekyc.screening.alert.v2": {
+      "post": {
+        "tags": [
+          "Decision events"
+        ],
+        "operationId": "receiveProductAlert",
+        "summary": "Receive a late screening alert",
+        "description": "At-least-once delivery to the configured internal receiver. Deduplicate by event_id (case_id:alert:operation_id). Case revisions may arrive out of order.",
+        "security": [
+          {
+            "webhookBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Matches event_id in the body.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductScreeningAlert"
+              }
+            }
+          }
+        },
+        "responses": {
+          "2XX": {
+            "description": "Durably accepted or recognized as a duplicate."
+          },
+          "default": {
+            "description": "Retry with backoff."
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "callerBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Service credential for the authorized product, reviewer or institution observer."
+      },
+      "webhookBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "The relay sends the configured WEBHOOK_TOKEN to the receiver as a bearer token."
+      }
+    },
+    "schemas": {
+      "CheckKind": {
+        "type": "string",
+        "enum": [
+          "document",
+          "face",
+          "address",
+          "sanctions"
+        ]
+      },
+      "Revision": {
+        "type": "integer",
+        "format": "int64",
+        "minimum": 1,
+        "description": "Monotonically increasing case revision."
+      },
+      "ProductCaseId": {
+        "type": "string",
+        "pattern": "^v2~[A-Za-z0-9-]{1,48}~[0-9a-f]{64}$",
+        "description": "Opaque full case ID returned by the service."
+      },
+      "ProductReference": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "description": "Opaque nonblank reference of up to 256 UTF-8 bytes. Control characters are excluded."
+      },
+      "ProductState": {
+        "type": "string",
+        "enum": [
+          "RUNNING",
+          "AWAITING_EVIDENCE",
+          "PROVIDER_BLOCKED",
+          "AWAITING_REVIEW",
+          "APPROVED",
+          "REJECTED"
+        ]
+      },
+      "ProductCheckStatus": {
+        "type": "string",
+        "enum": [
+          "AWAITING_EVIDENCE",
+          "PENDING",
+          "PASSED",
+          "BLOCKED",
+          "REVIEW",
+          "FAILED"
+        ]
+      },
+      "ProductEvidence": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [],
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/ProductReference"
+          },
+          "face": {
+            "$ref": "#/components/schemas/ProductReference"
+          },
+          "address": {
+            "$ref": "#/components/schemas/ProductReference"
+          }
+        },
+        "description": "References issued for this institution and subject. Face captures are bound to the current document portrait. The service derives the screening identity."
+      },
+      "ProductOpen": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "subject_ref",
+          "use_case"
+        ],
+        "properties": {
+          "subject_ref": {
+            "$ref": "#/components/schemas/ProductReference"
+          },
+          "use_case": {
+            "type": "string",
+            "examples": [
+              "onboarding",
+              "full_onboarding",
+              "address_refresh",
+              "loan_application"
+            ]
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/ProductEvidence"
+          }
+        }
+      },
+      "ProductEvidenceSubmission": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "evidence"
+        ],
+        "properties": {
+          "evidence": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ProductEvidence"
+              }
+            ],
+            "minProperties": 1
+          }
+        }
+      },
+      "ProductRetry": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "check"
+        ],
+        "properties": {
+          "check": {
+            "$ref": "#/components/schemas/CheckKind"
+          }
+        }
+      },
+      "ProductReview": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "check",
+          "operation_id",
+          "disposition",
+          "reason",
+          "review_ref"
+        ],
+        "properties": {
+          "check": {
+            "type": "string",
+            "const": "sanctions"
+          },
+          "operation_id": {
+            "type": "string",
+            "description": "Current operation ID from the reviewer handoff."
+          },
+          "disposition": {
+            "type": "string",
+            "enum": [
+              "clear",
+              "confirm"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "description": "Investigator's reason, 1–512 Unicode code points. Line feeds are allowed. The API normalizes CRLF to LF. Other control characters and blank-only reasons are invalid."
+          },
+          "review_ref": {
+            "$ref": "#/components/schemas/ProductReference"
+          }
+        }
+      },
+      "ProductCheck": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "status",
+          "origin",
+          "origin_case_id",
+          "operation_id",
+          "observed_at",
+          "attempt",
+          "reasons",
+          "next_action",
+          "interactive"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/CheckKind"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ProductCheckStatus"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "fresh",
+                  "reused"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "origin_case_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProductCaseId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "observed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "received_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Worker receipt time, when recorded. Earlier records may omit this field."
+          },
+          "attempt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "next_action": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "verify_document",
+                  "provide_evidence",
+                  "wait_for_provider",
+                  "retry",
+                  "review"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "interactive": {
+            "type": "boolean",
+            "description": "This check uses a local provider callback."
+          }
+        }
+      },
+      "ProductNextAction": {
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": [
+              "wait_for_provider",
+              "provide_evidence",
+              "retry",
+              "review"
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "ProductCaseView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "case_id",
+          "product",
+          "use_case",
+          "subject_ref",
+          "policy_version",
+          "state",
+          "version",
+          "checks",
+          "reasons",
+          "next_action",
+          "created_at",
+          "decided_at"
+        ],
+        "properties": {
+          "case_id": {
+            "$ref": "#/components/schemas/ProductCaseId"
+          },
+          "product": {
+            "type": "string"
+          },
+          "use_case": {
+            "type": "string"
+          },
+          "subject_ref": {
+            "$ref": "#/components/schemas/ProductReference"
+          },
+          "policy_version": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ProductState"
+          },
+          "version": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProductCheck"
+            }
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "check",
+                "code"
+              ],
+              "properties": {
+                "check": {
+                  "$ref": "#/components/schemas/CheckKind"
+                },
+                "code": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "next_action": {
+            "$ref": "#/components/schemas/ProductNextAction"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "decided_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "ProductAccepted": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "case_id",
+          "location"
+        ],
+        "properties": {
+          "case_id": {
+            "$ref": "#/components/schemas/ProductCaseId"
+          },
+          "location": {
+            "type": "string",
+            "format": "uri-reference"
+          }
+        }
+      },
+      "ProductReviewerCheck": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "status",
+          "operation_id",
+          "origin_case_id",
+          "provider",
+          "method",
+          "observed_at",
+          "evidence_ref",
+          "evidence_revision",
+          "reasons"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/CheckKind"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ProductCheckStatus"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "origin_case_id": {
+            "$ref": "#/components/schemas/ProductCaseId"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "received_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Worker receipt time, when recorded. Earlier records may omit this field."
+          },
+          "evidence_ref": {
+            "$ref": "#/components/schemas/ProductReference"
+          },
+          "evidence_revision": {
+            "type": "string"
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ProductReviewRecord": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "operation_id",
+          "action",
+          "actor",
+          "reason",
+          "review_ref",
+          "recorded_at"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/CheckKind"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "clear",
+              "confirm"
+            ]
+          },
+          "actor": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "review_ref": {
+            "$ref": "#/components/schemas/ProductReference"
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ProductReviewerView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "case_id",
+          "subject_ref",
+          "version",
+          "state",
+          "checks",
+          "reviews",
+          "alerts"
+        ],
+        "properties": {
+          "case_id": {
+            "$ref": "#/components/schemas/ProductCaseId"
+          },
+          "subject_ref": {
+            "$ref": "#/components/schemas/ProductReference"
+          },
+          "version": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ProductState"
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProductReviewerCheck"
+            }
+          },
+          "reviews": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProductReviewRecord"
+            }
+          },
+          "alerts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProductReviewerAlert"
+            },
+            "description": "Late screening alerts with provider provenance from the originally dispatched operation when available."
+          }
+        }
+      },
+      "ProductError": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "ProductActionEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "event_type",
+          "state",
+          "case_id",
+          "product",
+          "use_case",
+          "version",
+          "policy_version",
+          "checks",
+          "next_action",
+          "event_id",
+          "institution"
+        ],
+        "properties": {
+          "event_type": {
+            "type": "string",
+            "const": "ekyc.case.action.v2"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "RUNNING",
+              "AWAITING_EVIDENCE",
+              "PROVIDER_BLOCKED",
+              "AWAITING_REVIEW"
+            ]
+          },
+          "case_id": {
+            "$ref": "#/components/schemas/ProductCaseId"
+          },
+          "product": {
+            "type": "string"
+          },
+          "use_case": {
+            "type": "string"
+          },
+          "version": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "policy_version": {
+            "type": "string"
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProductCheck"
+            }
+          },
+          "next_action": {
+            "$ref": "#/components/schemas/ProductNextAction"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "institution": {
+            "type": "string"
+          }
+        }
+      },
+      "ProductDecidedEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "event_type",
+          "case_id",
+          "product",
+          "use_case",
+          "version",
+          "policy_version",
+          "checks",
+          "next_action",
+          "event_id",
+          "institution",
+          "state"
+        ],
+        "properties": {
+          "event_type": {
+            "type": "string",
+            "const": "ekyc.case.decided.v2"
+          },
+          "case_id": {
+            "$ref": "#/components/schemas/ProductCaseId"
+          },
+          "product": {
+            "type": "string"
+          },
+          "use_case": {
+            "type": "string"
+          },
+          "version": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "policy_version": {
+            "type": "string"
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProductCheck"
+            }
+          },
+          "next_action": {
+            "type": "null"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "institution": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "APPROVED",
+              "REJECTED"
+            ]
+          }
+        }
+      },
+      "ProductScreeningAlert": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "event_type",
+          "event_id",
+          "case_id",
+          "institution",
+          "product",
+          "operation_id",
+          "observed_at",
+          "reason",
+          "next_action"
+        ],
+        "properties": {
+          "event_type": {
+            "type": "string",
+            "const": "ekyc.screening.alert.v2"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "case_id": {
+            "$ref": "#/components/schemas/ProductCaseId"
+          },
+          "institution": {
+            "type": "string"
+          },
+          "product": {
+            "type": "string"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reason": {
+            "type": "string",
+            "const": "POTENTIAL_SANCTIONS_MATCH"
+          },
+          "next_action": {
+            "type": "string",
+            "const": "investigate"
+          },
+          "received_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Worker receipt time, when recorded. Earlier records may omit this field."
+          }
+        }
+      },
+      "ProductReviewerAlert": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "event_id",
+          "operation_id",
+          "observed_at",
+          "reason",
+          "provider",
+          "method",
+          "evidence_ref",
+          "evidence_revision"
+        ],
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reason": {
+            "type": "string",
+            "const": "POTENTIAL_SANCTIONS_MATCH"
+          },
+          "provider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "method": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence_revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "received_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Worker receipt time, when recorded. Earlier records may omit this field."
+          }
+        }
+      },
+      "ProductCasePage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cases",
+          "total",
+          "page",
+          "page_size",
+          "from",
+          "to"
+        ],
+        "properties": {
+          "cases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProductCaseView"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ProductOverview": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "total",
+          "states",
+          "checks",
+          "from",
+          "to"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "states": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "status",
+                "origin",
+                "count"
+              ],
+              "properties": {
+                "kind": {
+                  "$ref": "#/components/schemas/CheckKind"
+                },
+                "status": {
+                  "$ref": "#/components/schemas/ProductCheckStatus"
+                },
+                "origin": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "fresh",
+                    "reused",
+                    null
+                  ]
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ProductHistory": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "revisions",
+          "next_before_version"
+        ],
+        "properties": {
+          "revisions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "version",
+                "recorded_at",
+                "view"
+              ],
+              "properties": {
+                "version": {
+                  "$ref": "#/components/schemas/Revision"
+                },
+                "recorded_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "view": {
+                  "$ref": "#/components/schemas/ProductCaseView"
+                }
+              }
+            }
+          },
+          "next_before_version": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "ProductLiveCheck": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "operation_id",
+          "status",
+          "response",
+          "invocation_id"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/CheckKind"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "registering",
+              "awaiting_response",
+              "sending",
+              "sent",
+              "closed",
+              "unavailable"
+            ]
+          },
+          "response": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "invocation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ProductLivePanel": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "checks"
+        ],
+        "properties": {
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProductLiveCheck"
+            }
+          }
+        }
+      },
+      "ProductCallbackReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "response",
+          "invocation_id"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "registering",
+              "awaiting_response",
+              "sending",
+              "sent",
+              "closed",
+              "unavailable"
+            ]
+          },
+          "response": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "invocation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "InvalidQuery": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "error",
+          "message"
+        ],
+        "properties": {
+          "error": {
+            "const": "invalid_query"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "StaffSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "actor_id",
+          "role",
+          "institution",
+          "products"
+        ],
+        "properties": {
+          "actor_id": {
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "reviewer",
+              "observer"
+            ]
+          },
+          "institution": {
+            "type": "string"
+          },
+          "products": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Investigation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "work_id",
+          "kind",
+          "case_id",
+          "product",
+          "operation_id",
+          "state",
+          "opened_at",
+          "acknowledged_by",
+          "acknowledged_at"
+        ],
+        "properties": {
+          "work_id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "screening_review",
+              "late_alert"
+            ]
+          },
+          "case_id": {
+            "$ref": "#/components/schemas/ProductCaseId"
+          },
+          "product": {
+            "type": "string"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ProductState"
+          },
+          "opened_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "acknowledged_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "acknowledged_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "InvestigationPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "next_after"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Investigation"
+            }
+          },
+          "next_after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "responses": {
+      "Product400": {
+        "description": "Missing or invalid Idempotency-Key or malformed JSON.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProductError"
+            }
+          },
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Product401": {
+        "description": "Missing or invalid bearer credential.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProductError"
+            }
+          }
+        }
+      },
+      "Product403": {
+        "description": "Role, product use case, or grant denied.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProductError"
+            }
+          }
+        }
+      },
+      "Product404": {
+        "description": "Case unavailable to this credential.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProductError"
+            }
+          }
+        }
+      },
+      "Product409": {
+        "description": "A different payload reused an existing key (idempotency_key_reused), the screening operation changed (stale_operation), the case closed (case_already_decided), or the current state disallows the command (invalid_case_state).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProductError"
+            }
+          }
+        }
+      },
+      "Product413": {
+        "description": "Body exceeds 16 KiB.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProductError"
+            }
+          },
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Product415": {
+        "description": "The request must use application/json.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProductError"
+            }
+          },
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Product422": {
+        "description": "Invalid request, evidence binding or policy input.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProductError"
+            }
+          },
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Product429": {
+        "description": "Caller admission quota reached. Wait before replaying the same command.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProductError"
+            }
+          }
+        },
+        "headers": {
+          "Retry-After": {
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      },
+      "Product503": {
+        "description": "A required service is unavailable.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProductError"
+            }
+          }
+        }
+      },
+      "ProductAccepted": {
+        "description": "Command accepted. Read the case at the relative Location URL. A replay with the same key and body returns the same case ID.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ProductAccepted"
+            }
+          }
+        },
+        "headers": {
+          "Location": {
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uri-reference"
+            }
+          }
+        }
+      },
+      "InvalidQuery": {
+        "description": "The query contains an invalid filter, date range, cursor or pagination value. The message identifies the correction.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/InvalidQuery"
+            }
+          }
+        }
+      }
+    }
+  }
+}

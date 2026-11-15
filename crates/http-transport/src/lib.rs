@@ -29,17 +29,28 @@ impl Transport {
         Ok(Self { client })
     }
 
-    pub async fn post<I, O>(
+    /// Register an asynchronous check. Only an explicit acceptance opens a callback wait.
+    pub async fn post_accepted<I: Serialize + Sync>(
         &self,
         endpoint: &str,
         operation_id: &str,
         input: &I,
-    ) -> Result<O, ProviderError>
-    where
-        I: Serialize + Sync,
-        O: DeserializeOwned,
-    {
-        let mut response = self
+    ) -> Result<(), ProviderError> {
+        let response = self.post_response(endpoint, operation_id, input).await?;
+        if response.status() == StatusCode::ACCEPTED {
+            Ok(())
+        } else {
+            Err(permanent())
+        }
+    }
+
+    async fn post_response<I: Serialize + Sync>(
+        &self,
+        endpoint: &str,
+        operation_id: &str,
+        input: &I,
+    ) -> Result<reqwest::Response, ProviderError> {
+        let response = self
             .client
             .post(endpoint)
             .header("Idempotency-Key", operation_id)
@@ -55,7 +66,16 @@ impl Transport {
                 .and_then(|value| retry_after_ms(value, SystemTime::now()));
             return Err(status_error(response.status(), retry_after));
         }
+        Ok(response)
+    }
 
+    pub async fn post_bytes<I: Serialize + Sync>(
+        &self,
+        endpoint: &str,
+        operation_id: &str,
+        input: &I,
+    ) -> Result<Vec<u8>, ProviderError> {
+        let mut response = self.post_response(endpoint, operation_id, input).await?;
         if response
             .content_length()
             .is_some_and(|size| size > MAX_RESPONSE_BYTES as u64)
@@ -69,8 +89,12 @@ impl Transport {
             }
             bytes.extend_from_slice(&chunk);
         }
-        serde_json::from_slice(&bytes).map_err(|_| permanent())
+        Ok(bytes)
     }
+}
+
+pub fn decode_json<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, ProviderError> {
+    serde_json::from_slice(bytes).map_err(|_| permanent())
 }
 
 fn permanent() -> ProviderError {

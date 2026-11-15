@@ -1,0 +1,62 @@
+.staff-page {
+  max-width: 1120px;
+  margin: auto;
+  padding: clamp(18px, 4vw, 48px);
+}
+.staff-login {
+  margin: 24px 0;
+  padding: 24px;
+  max-width: 450px;
+}
+.staff-header,
+.staff-queue-heading,
+.staff-nav,
+.report-cutoff {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  justify-content: space-between;
+}
+.staff-header p,
+.staff-queue > p,
+.staff-items p {
+  color: var(--muted);
+  margin: 8px 0;
+}
+.staff-nav {
+  justify-content: flex-start;
+  margin: 20px 0;
+}
+.staff-nav [aria-current="page"] {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.staff-queue {
+  padding: clamp(16px, 2.5vw, 28px);
+}
+.staff-queue-heading label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.staff-items {
+  padding: 0;
+  list-style: none;
+}
+.staff-items li {
+  border-top: 1px solid var(--line);
+  padding: 18px 0;
+}
+.staff-items code {
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.staff-items .ci-buttons {
+  margin-top: 12px;
+}
+.report-cutoff {
+  background: #edf4ef;
+  border-radius: 8px;
+  padding: 10px 16px;
+}

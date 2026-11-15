@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use chrono::NaiveDate;
 use ekyc_domain::{CheckKind, Observation};
-use ekyc_http_transport::Transport;
-use ekyc_ports::{Provider, ProviderError};
+use ekyc_http_transport::{decode_json, Transport};
+use ekyc_ports::{Evaluated, Provider, ProviderError};
 use serde::{Deserialize, Serialize};
 
 pub struct AddressProvider {
@@ -50,18 +50,23 @@ impl Provider for AddressProvider {
         &self,
         evidence_ref: &str,
         operation_id: &str,
-    ) -> Result<Observation, ProviderError> {
+    ) -> Result<Evaluated<Observation>, ProviderError> {
         let input = Request {
             proof_ref: evidence_ref,
         };
-        let response: Response = self
+        let body = self
             .transport
-            .post(&self.endpoint, operation_id, &input)
+            .post_bytes(&self.endpoint, operation_id, &input)
             .await?;
-        Ok(Observation::Address {
+        self.decode(&body)
+    }
+
+    fn decode(&self, body: &[u8]) -> Result<Evaluated<Observation>, ProviderError> {
+        let reply: Evaluated<Response> = decode_json(body)?;
+        Ok(reply.map(|response| Observation::Address {
             passed: matches!(response.status, Status::Pass),
             confidence: response.confidence,
             proof_date: response.proof_date,
-        })
+        }))
     }
 }

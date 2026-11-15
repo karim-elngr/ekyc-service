@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use ekyc_domain::{CheckKind, Observation};
-use ekyc_http_transport::Transport;
-use ekyc_ports::{Provider, ProviderError, ProviderErrorKind};
+use ekyc_http_transport::{decode_json, Transport};
+use ekyc_ports::{Evaluated, Provider, ProviderError, ProviderErrorKind, ScreeningLookup};
 use serde::{Deserialize, Serialize};
 
 pub struct SanctionsProvider {
@@ -47,21 +47,66 @@ impl Provider for SanctionsProvider {
         &self,
         evidence_ref: &str,
         operation_id: &str,
-    ) -> Result<Observation, ProviderError> {
+    ) -> Result<Evaluated<Observation>, ProviderError> {
         let input = Request {
             identity_ref: evidence_ref,
         };
-        let response: Response = self
+        let body = self
             .transport
-            .post(&self.endpoint, operation_id, &input)
+            .post_bytes(&self.endpoint, operation_id, &input)
             .await?;
-        match (response.screening_status, response.match_count) {
-            (ScreeningStatus::Clear, 0) => Ok(Observation::Sanctions { hit: false }),
-            (ScreeningStatus::Hit, 1..) => Ok(Observation::Sanctions { hit: true }),
-            _ => Err(ProviderError {
-                kind: ProviderErrorKind::Permanent,
-                retry_after_ms: None,
-            }),
+        self.decode(&body)
+    }
+
+    fn decode(&self, body: &[u8]) -> Result<Evaluated<Observation>, ProviderError> {
+        let reply: Evaluated<Response> = decode_json(body)?;
+        decode(reply)
+    }
+
+    async fn screening_result(&self, operation_id: &str) -> Result<ScreeningLookup, ProviderError> {
+        #[derive(Serialize)]
+        struct LookupRequest<'a> {
+            operation_id: &'a str,
         }
+        #[derive(Deserialize)]
+        #[serde(tag = "status", rename_all = "snake_case")]
+        enum Lookup {
+            Pending,
+            NotAccepted,
+            Inconclusive,
+            Complete { result: Evaluated<Response> },
+        }
+        let body = self
+            .transport
+            .post_bytes(
+                &format!("{}/result", self.endpoint),
+                operation_id,
+                &LookupRequest { operation_id },
+            )
+            .await?;
+        Ok(match decode_json(&body)? {
+            Lookup::Pending => ScreeningLookup::Pending,
+            Lookup::NotAccepted => ScreeningLookup::NotAccepted,
+            Lookup::Inconclusive => ScreeningLookup::Inconclusive,
+            Lookup::Complete { result } => ScreeningLookup::Complete(decode(result)?),
+        })
+    }
+}
+
+fn decode(reply: Evaluated<Response>) -> Result<Evaluated<Observation>, ProviderError> {
+    let response = reply.result;
+    match (response.screening_status, response.match_count) {
+        (ScreeningStatus::Clear, 0) => Ok(Evaluated {
+            evaluated_at: reply.evaluated_at,
+            result: Observation::Sanctions { hit: false },
+        }),
+        (ScreeningStatus::Hit, 1..) => Ok(Evaluated {
+            evaluated_at: reply.evaluated_at,
+            result: Observation::Sanctions { hit: true },
+        }),
+        _ => Err(ProviderError {
+            kind: ProviderErrorKind::Permanent,
+            retry_after_ms: None,
+        }),
     }
 }

@@ -1,0 +1,378 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Institution evidence issuer",
+    "version": "2.0.0",
+    "description": "Implemented by the institution's evidence service. The worker resolves immutable references for one institution and customer and checks the returned method and vendor against its pinned configuration."
+  },
+  "paths": {
+    "/v2/resolve": {
+      "post": {
+        "operationId": "resolveEvidence",
+        "security": [
+          {
+            "issuerBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveRequest"
+              },
+              "examples": {
+                "empty": {
+                  "value": {
+                    "institution": "demo-bank",
+                    "subject_ref": "customer-42",
+                    "evidence": {}
+                  }
+                },
+                "identityPair": {
+                  "value": {
+                    "institution": "demo-bank",
+                    "subject_ref": "customer-42",
+                    "evidence": {
+                      "document": "issued-document",
+                      "face": "issued-face"
+                    }
+                  }
+                },
+                "addressOnly": {
+                  "value": {
+                    "institution": "demo-bank",
+                    "subject_ref": "address-only",
+                    "evidence": {
+                      "address": "issued-address"
+                    }
+                  }
+                },
+                "bindingMismatch": {
+                  "summary": "The reference was issued for a different subject. Return HTTP 422.",
+                  "value": {
+                    "institution": "demo-bank",
+                    "subject_ref": "another-customer",
+                    "evidence": {
+                      "document": "issued-document"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "One bound item per requested reference, plus current identity bindings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveResponse"
+                },
+                "examples": {
+                  "newSubject": {
+                    "value": {
+                      "evidence": {},
+                      "current_document_revision": null,
+                      "current_portrait_revision": null,
+                      "screening": null
+                    }
+                  },
+                  "identityPair": {
+                    "value": {
+                      "evidence": {
+                        "document": {
+                          "tenant_id": "demo-bank",
+                          "subject_ref": "customer-42",
+                          "kind": "document",
+                          "method": "document_verification",
+                          "provider": "document",
+                          "evidence_ref": "issued-document",
+                          "revision": "document-r1",
+                          "provider_ref": "vendor-document",
+                          "document_revision": "document-r1",
+                          "portrait_revision": "portrait-r1"
+                        },
+                        "face": {
+                          "tenant_id": "demo-bank",
+                          "subject_ref": "customer-42",
+                          "kind": "face",
+                          "method": "face_comparison",
+                          "provider": "face",
+                          "evidence_ref": "issued-face",
+                          "revision": "face-r1",
+                          "provider_ref": "vendor-face",
+                          "document_revision": "document-r1",
+                          "portrait_revision": "portrait-r1"
+                        }
+                      },
+                      "current_document_revision": "document-r1",
+                      "current_portrait_revision": "portrait-r1",
+                      "screening": {
+                        "tenant_id": "demo-bank",
+                        "subject_ref": "customer-42",
+                        "kind": "sanctions",
+                        "method": "sanctions_screening",
+                        "provider": "sanctions",
+                        "evidence_ref": "issued-sanctions",
+                        "revision": "sanctions-r1",
+                        "provider_ref": "vendor-sanctions",
+                        "document_revision": "document-r1",
+                        "portrait_revision": null
+                      }
+                    }
+                  },
+                  "addressOnly": {
+                    "value": {
+                      "evidence": {
+                        "address": {
+                          "tenant_id": "demo-bank",
+                          "subject_ref": "address-only",
+                          "kind": "address",
+                          "method": "address_verification",
+                          "provider": "address",
+                          "evidence_ref": "issued-address",
+                          "revision": "address-r1",
+                          "provider_ref": "vendor-address",
+                          "document_revision": null,
+                          "portrait_revision": null
+                        }
+                      },
+                      "current_document_revision": null,
+                      "current_portrait_revision": null,
+                      "screening": null
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown, foreign, unavailable for this subject, or mismatched reference. No partial response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuerError"
+                },
+                "examples": {
+                  "bindingMismatch": {
+                    "value": {
+                      "error": "invalid_evidence"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Temporary issuer dependency failure. The worker holds affected work.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuerError"
+                },
+                "examples": {
+                  "temporaryOutage": {
+                    "value": {
+                      "error": "issuer_unavailable"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The issuer rejected the worker credential."
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "issuerBearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "ResolveRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "institution",
+          "subject_ref",
+          "evidence"
+        ],
+        "properties": {
+          "institution": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "subject_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "evidence": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "document": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "face": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "address": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            }
+          }
+        }
+      },
+      "Asset": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tenant_id",
+          "subject_ref",
+          "kind",
+          "evidence_ref",
+          "revision",
+          "provider",
+          "provider_ref",
+          "method",
+          "document_revision",
+          "portrait_revision"
+        ],
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "subject_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "kind": {
+            "enum": [
+              "document",
+              "face",
+              "address",
+              "sanctions"
+            ]
+          },
+          "evidence_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "revision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Exact vendor identity configured for this check. Bundled IDs are document, face, address and sanctions."
+          },
+          "provider_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "method": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "document_revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "portrait_revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ResolveResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "evidence",
+          "current_document_revision",
+          "current_portrait_revision",
+          "screening"
+        ],
+        "properties": {
+          "evidence": {
+            "type": "object",
+            "properties": {
+              "document": {
+                "$ref": "#/components/schemas/Asset"
+              },
+              "face": {
+                "$ref": "#/components/schemas/Asset"
+              },
+              "address": {
+                "$ref": "#/components/schemas/Asset"
+              }
+            },
+            "additionalProperties": false
+          },
+          "current_document_revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "current_portrait_revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "screening": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Asset"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "IssuerError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      }
+    }
+  }
+}

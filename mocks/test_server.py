@@ -3,6 +3,9 @@
 import http.client
 import json
 import socket
+import tempfile
+import os
+from unittest.mock import patch
 import threading
 import unittest
 from datetime import date, datetime, timedelta, timezone
@@ -48,16 +51,54 @@ class MockContracts(unittest.TestCase):
         self.assertEqual(document["status"], "PASS")
         self.assertGreater(date.fromisoformat(document["expires_on"]), today)
         self.assertGreater(document["confidence"], 85)
-        self.assertEqual(self.send("face")[:2], (200, {
+        self.assertEqual({k:v for k,v in self.send("face")[1].items() if k != "evaluated_at"}, {
             "match_status": "PASS", "confidence": 95, "similarity_score": 96.5,
-        }))
+        })
         status, address, _ = self.send("address")
         self.assertEqual((status, address["status"]), (200, "PASS"))
         self.assertGreater(address["confidence"], 80)
         self.assertEqual(date.fromisoformat(address["proof_date"]), today - timedelta(days=10))
-        self.assertEqual(self.send("sanctions")[:2], (200, {
+        self.assertEqual({k:v for k,v in self.send("sanctions")[1].items() if k != "evaluated_at"}, {
             "screening_status": "CLEAR", "match_count": 0,
-        }))
+        })
+
+    def test_retrieved_older_pass_precedes_intervening_adverse_result(self):
+        with self.assertRaises((TimeoutError, socket.timeout)):
+            self.send("face", "timeout-once", key="older-pass", timeout=.05)
+        adverse = self.send("face", "review", key="newer-adverse")[1]
+        old = self.send("face", "timeout-once", key="older-pass")[1]
+        self.assertLess(datetime.fromisoformat(old["evaluated_at"]), datetime.fromisoformat(adverse["evaluated_at"]))
+        self.assertEqual(self.send("face", "timeout-once", key="older-pass")[1], old)
+
+    def test_authoritative_lookup_never_submits_another_screen(self):
+        op = "loan/sanctions/1"
+        def lookup():
+            return self.send("sanctions", key=op, path="/screenings/result", payload={"operation_id": op})[:2]
+        self.assertEqual(self.send("sanctions", key="missing", path="/screenings/result",
+                                   payload={"operation_id":"missing"})[:2], (200, {"status": "not_accepted"}))
+        self.assertEqual(self.send("sanctions", "pass", key="missing")[0], 409)
+        with self.assertRaises((TimeoutError, socket.timeout)):
+            self.send("sanctions", "held-hit", key=op, timeout=.05)
+        try:
+            self.assertEqual(lookup(), (200, {"status": "pending"}))
+        finally:
+            self.servers["sanctions"].release_held(op)
+        state, result = lookup()
+        self.assertEqual((state, result["status"], result["result"]["screening_status"]), (200, "complete", "HIT"))
+        self.assertEqual(lookup()[1], result)
+        self.assertEqual(self.servers["sanctions"].operations[op].attempts, 1)
+
+    def test_screen_results_and_negative_fences_survive_mock_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ, {"PROVIDER_DB_PATH": os.path.join(directory, "results.db")}):
+                with ProviderServer(("127.0.0.1", 0), "sanctions", .1) as first:
+                    original, _ = first.evaluate("held", "demo:held-hit")
+                    self.assertEqual(first.screening_result("missing").payload["status"], "not_accepted")
+                with ProviderServer(("127.0.0.1", 0), "sanctions", .1) as second:
+                    self.assertEqual(second.screening_result("held").payload["status"], "pending")
+                    self.assertTrue(second.release_held("held"))
+                    self.assertEqual(second.screening_result("held").payload["result"], original.payload)
+                    self.assertEqual(second.evaluate("missing", "demo:pass")[0].status, 409)
 
     def test_contract_rejects_wrong_route_and_schema(self):
         self.assertEqual(self.send("face", path="/documents/verify")[0], 404)
@@ -67,7 +108,7 @@ class MockContracts(unittest.TestCase):
 
     def test_subject_scoped_operation_key(self):
         original = self.send("sanctions", "hit")
-        self.assertEqual(original[:2], (200, {"screening_status": "HIT", "match_count": 1}))
+        self.assertEqual((original[0], original[1]["screening_status"], original[1]["match_count"]), (200, "HIT", 1))
         self.assertEqual(original[:2], self.send("sanctions", "hit")[:2])
         self.assertEqual(self.send("sanctions", "pass")[0], 409)
 

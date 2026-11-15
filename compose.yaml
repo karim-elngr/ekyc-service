@@ -1,10 +1,13 @@
 name: ekyc
 x-rust: &rust
-  image: ekyc-local:dev
+  image: ${EKYC_SERVICE_IMAGE:-ekyc-local:dev}
   build: .
 x-provider: &provider
-  image: ekyc-mock:dev
+  image: ${EKYC_MOCK_IMAGE:-ekyc-mock:dev}
   build: ./mocks
+  environment:
+    RESTATE_INGRESS_URL: http://restate:8080
+    INTERACTIVE_DB_PATH: /data/interactive.sqlite3
 services:
   postgres:
     image: postgres:17-alpine
@@ -20,35 +23,56 @@ services:
       retries: 30
   restate:
     image: restatedev/restate:1.8.1
-    ports: ["127.0.0.1:9070:9070"]
+    ports: ["127.0.0.1:${EKYC_RESTATE_ADMIN_PORT:-9070}:9070"]
     volumes: [restatedata:/restate-data]
   document:
     <<: *provider
     command: ["document"]
+    volumes: [document_demo:/data]
   face:
     <<: *provider
     command: ["face"]
+    volumes: [face_demo:/data]
   address:
     <<: *provider
     command: ["address"]
+    volumes: [address_demo:/data]
   sanctions:
     <<: *provider
     command: ["sanctions"]
+    volumes: [sanctions_demo:/data]
+  issuer:
+    image: python:3.12-alpine
+    volumes: ["./mocks:/mock:ro", "issuerdata:/data"]
+    command: ["python3", "-u", "/mock/evidence.py"]
+    environment:
+      ISSUER_BIND: 0.0.0.0
+      PORT: "9805"
+      ISSUER_DB: /data/issuer.sqlite3
+      EKYC_EVIDENCE_TOKEN: &issuer_token local-demo-evidence-issuer
+    ports: ["127.0.0.1:${EKYC_ISSUER_PORT:-9805}:9805"]
   worker:
     <<: *rust
     command: ["ekyc-worker"]
+    networks:
+      default:
+        aliases: [worker-cases-iteration1]
     depends_on:
       postgres: {condition: service_healthy}
+      issuer: {condition: service_started}
       document: {condition: service_started}
       face: {condition: service_started}
       address: {condition: service_started}
       sanctions: {condition: service_started}
     environment:
       DATABASE_URL: &db postgres://ekyc:local-demo-only@postgres/ekyc
-      DOCUMENT_URL: http://document:8080
-      FACE_URL: http://face:8080
-      ADDRESS_URL: http://address:8080
-      SANCTIONS_URL: http://sanctions:8080
+      EKYC_DEMO_CALLBACKS: "1"
+      DOCUMENT_URL: &document_url http://document:8080
+      FACE_URL: &face_url http://face:8080
+      ADDRESS_URL: &address_url http://address:8080
+      SANCTIONS_URL: &sanctions_url http://sanctions:8080
+      EKYC_EVIDENCE_URL: http://issuer:9805
+      EKYC_EVIDENCE_TOKEN: *issuer_token
       MAX_ATTEMPTS: "3"
       CASE_DEADLINE_MS: "30000"
       CHECK_TIMEOUT_MS: "2500"
@@ -58,22 +82,42 @@ services:
     image: python:3.12-alpine
     depends_on: [restate, worker]
     volumes: ["./scripts/register.py:/register.py:ro"]
-    command: ["python3", "/register.py", "http://restate:9070", "http://worker:9080"]
+    command: ["python3", "/register.py", "http://restate:9070", "http://worker-cases-iteration1:9080"]
   api:
     <<: *rust
     command: ["ekyc-api"]
-    ports: ["127.0.0.1:8090:8090"]
+    ports: ["127.0.0.1:${EKYC_API_PORT:-8090}:8090"]
     depends_on:
       register: {condition: service_completed_successfully}
       postgres: {condition: service_healthy}
     environment:
       DATABASE_URL: *db
       RESTATE_INGRESS_URL: http://restate:8080
+      EKYC_DEMO_CALLBACKS: "1"
+      DOCUMENT_URL: *document_url
+      FACE_URL: *face_url
+      ADDRESS_URL: *address_url
+      SANCTIONS_URL: *sanctions_url
       ADMISSION_PER_MINUTE: "60"
-      EKYC_CLIENTS: >-
-        [{"id":"demo","token":"local-demo-onboarding","purposes":["full_onboarding","address_refresh"]},
-        {"id":"partner","token":"local-demo-refresher","purposes":["address_refresh"]},
-        {"id":"quota-test","token":"local-demo-quota-test","purposes":["address_refresh"]}]
+      EKYC_CLIENTS_FILE: /config/clients.json
+    volumes: ["./config/demo-clients.json:/config/clients.json:ro"]
+  portal:
+    profiles: [portal]
+    image: ${EKYC_PORTAL_IMAGE:-ekyc-portal:dev}
+    build: ./apps/portal
+    volumes: ["./workflow-orchestration:/app/dist/talk:ro"]
+    depends_on: [api]
+    ports: ["127.0.0.1:${EKYC_PORTAL_PORT:-5173}:5173"]
+    environment:
+      EKYC_PORTAL_MODE: demo
+      EKYC_API_URL: http://api:8090
+      EKYC_ISSUER_URL: http://issuer:9805
+      EKYC_RESTATE_ADMIN_PORT: "${EKYC_RESTATE_ADMIN_PORT:-9070}"
+      EKYC_WALLET_TOKEN: local-demo-wallet-product
+      EKYC_LENDING_TOKEN: local-demo-lending-product
+      EKYC_WALLET_REVIEWER_TOKEN: local-demo-wallet-reviewer
+      EKYC_LENDING_REVIEWER_TOKEN: local-demo-lending-reviewer
+      EKYC_OBSERVER_TOKEN: local-demo-institution-observer
   webhook:
     <<: *rust
     command: ["ekyc-webhook"]
@@ -86,13 +130,18 @@ services:
       WEBHOOK_TOKEN: local-demo-events-token
   webhook-sink:
     image: python:3.12-alpine
-    ports: ["127.0.0.1:8110:8110"]
+    ports: ["127.0.0.1:${EKYC_SINK_PORT:-8110}:8110"]
     volumes: ["./mocks/webhook_sink.py:/sink.py:ro", "sinkdata:/data"]
     command: ["python3", "-u", "/sink.py"]
     environment:
       WEBHOOK_TOKEN: local-demo-events-token
       WEBHOOK_DB: /data/events.sqlite3
 volumes:
+  document_demo: {}
+  face_demo: {}
+  address_demo: {}
+  sanctions_demo: {}
+  issuerdata: {}
   pgdata: {}
   restatedata: {}
   sinkdata: {}

@@ -1,0 +1,11 @@
+FROM docker.io/library/debian:bookworm-slim
+
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    orca at-spi2-core chromium chromium-driver python3-selenium \
+    xvfb xauth openbox dbus-x11 libglib2.0-bin util-linux \
+    speech-dispatcher speech-dispatcher-espeak-ng espeak-ng pulseaudio pulseaudio-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /qa
+COPY run.sh journey.py ./
+ENTRYPOINT ["dbus-run-session", "--", "sh", "/qa/run.sh"]

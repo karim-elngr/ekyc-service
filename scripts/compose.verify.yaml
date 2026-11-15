@@ -1,0 +1,27 @@
+# The verifier supplies loopback-only ephemeral ports for direct test observations.
+services:
+  postgres:
+    ports: ["127.0.0.1:${EKYC_PG_PORT:?}:5432"]
+  document:
+    ports: ["127.0.0.1:${EKYC_DOCUMENT_PORT:?}:8080"]
+  face:
+    ports: ["127.0.0.1:${EKYC_FACE_PORT:?}:8080"]
+  address:
+    ports: ["127.0.0.1:${EKYC_ADDRESS_PORT:?}:8080"]
+  sanctions:
+    ports: ["127.0.0.1:${EKYC_SANCTIONS_PORT:?}:8080"]
+  api:
+    environment:
+      ADMISSION_PER_MINUTE: "1000"
+  worker:
+    environment:
+      CHECK_TIMEOUT_MS: "8000"
+      CASE_DEADLINE_MS: "26000"
+      PROVIDER_PER_MINUTE: "1000"
+      PROVIDER_MAX_IN_FLIGHT: "16"
+  staff-portal:
+    image: ${EKYC_PORTAL_IMAGE:?}
+    depends_on: [api]
+    ports: ["127.0.0.1:${EKYC_STAFF_PORTAL_PORT:-0}:5173"]
+    environment:
+      EKYC_API_URL: http://api:8090

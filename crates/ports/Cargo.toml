@@ -5,6 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
+chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"
 ekyc-domain = { path = "../domain" }
 serde = { version = "1", features = ["derive"] }

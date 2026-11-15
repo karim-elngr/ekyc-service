@@ -13,14 +13,20 @@ def register(admin, worker, timeout=90):
         try:
             with urlopen(endpoint, timeout=3) as result:
                 deployments = json.load(result)["deployments"]
-            if any(d.get("uri", "").rstrip("/") == worker.rstrip("/") for d in deployments):
-                print("Worker already registered")
-                return
+            matching = {item["id"] for item in deployments
+                        if item.get("uri", "").rstrip("/") == worker.rstrip("/")}
+            if matching:
+                with urlopen(admin.rstrip("/") + "/services/ProductCase", timeout=3) as result:
+                    service = json.load(result)
+                handlers = {h["name"] for h in service.get("handlers", []) if h.get("public")}
+                if service.get("deployment_id") in matching and {"command", "readiness_v2"} <= handlers:
+                    print("Current worker and command contract registered")
+                    return
+                raise SystemExit("Stale worker registration. Deploy this revision at a new versioned worker URI and register it.")
             request = Request(endpoint, data=json.dumps({"uri": worker}).encode(),
                               headers={"Content-Type": "application/json"}, method="POST")
             with urlopen(request, timeout=5):
-                print("Worker registered")
-                return
+                print("Worker registered, verifying its command handlers")
         except HTTPError as exc:
             last_error = f"HTTP {exc.code}: {exc.read(500).decode(errors='replace')}"
         except (URLError, OSError) as exc:

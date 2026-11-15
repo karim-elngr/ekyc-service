@@ -1,0 +1,8 @@
+{
+  "product": "wallet", "use_case": "onboarding", "version": "wallet.onboarding.v1",
+  "checks": [
+    {"kind": "document", "methods": ["document_verification"], "min_confidence": 85},
+    {"kind": "face", "methods": ["face_comparison"], "min_confidence": 85, "min_similarity": 85},
+    {"kind": "sanctions", "methods": ["sanctions_screening"]}
+  ]
+}

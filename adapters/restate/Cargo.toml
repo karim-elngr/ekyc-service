@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 restate-sdk = "=0.13.0"
 tracing = "0.1"
@@ -22,3 +23,4 @@ ekyc-provider-address = { path = "../provider-address" }
 ekyc-provider-document = { path = "../provider-document" }
 ekyc-provider-face = { path = "../provider-face" }
 ekyc-provider-sanctions = { path = "../provider-sanctions" }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

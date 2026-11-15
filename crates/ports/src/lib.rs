@@ -1,20 +1,60 @@
 //! The outbound verification port. Each provider owns its wire contract.
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use ekyc_domain::{CheckKind, Observation};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+/// The vendor assigns this instant exactly once, including for a cached result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Evaluated<T> {
+    pub evaluated_at: DateTime<Utc>,
+    #[serde(flatten)]
+    pub result: T,
+}
+
+impl<T> Evaluated<T> {
+    pub fn map<R>(self, f: impl FnOnce(T) -> R) -> Evaluated<R> {
+        Evaluated {
+            evaluated_at: self.evaluated_at,
+            result: f(self.result),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum ScreeningLookup {
+    Pending,
+    NotAccepted,
+    Inconclusive,
+    Complete(Evaluated<Observation>),
+}
+
 #[async_trait]
 pub trait Provider: Send + Sync {
     fn kind(&self) -> CheckKind;
+
+    /// Decode a successful vendor response, whether delivered inline or by callback.
+    fn decode(&self, body: &[u8]) -> Result<Evaluated<Observation>, ProviderError>;
+
+    /// Read-only authoritative operation lookup, implemented by sanctions adapters.
+    async fn screening_result(
+        &self,
+        _operation_id: &str,
+    ) -> Result<ScreeningLookup, ProviderError> {
+        Err(ProviderError {
+            kind: ProviderErrorKind::Permanent,
+            retry_after_ms: None,
+        })
+    }
 
     /// Operation IDs are stable across retries of one logical check.
     async fn check(
         &self,
         evidence_ref: &str,
         operation_id: &str,
-    ) -> Result<Observation, ProviderError>;
+    ) -> Result<Evaluated<Observation>, ProviderError>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
