@@ -7,8 +7,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DECK = ROOT / "workflow-orchestration/index.html"
+GATE_SQL = "adapters/postgres/migrations/0002_dispatch_limits.sql"
 # Start and end tokens select actual statements, including multi-line changes.
 SNIPPETS = {
+    GATE_SQL + "#dispatch": [
+        ("IF active_count >= p_max_in_flight", "END IF;", None),
+        ("IF recent_count >= p_per_minute", "END IF;", None),
+    ],
+    GATE_SQL + "#breaker": [
+        ("IF gate.open_until IS NOT NULL AND active_probe_expiry", "END IF;", None),
+        ("IF p_failed AND (finished.probe", "WHERE provider = p_provider;", None),
+    ],
     "adapters/restate/src/product.rs": [("Ok(ctx", ".into_inner())", "async fn clock(")],
     "adapters/restate/src/product/commands.rs": [('if let Some(receipt)', "}", 'return Err(conflict("idempotency_key_reused"));')],
     "adapters/restate/src/product/dispatch.rs": [("let provider = ctx", ".send_after(Duration::from_millis(deadline));", None)],
@@ -24,9 +33,11 @@ def line_number(lines, token, start=0):
 def snippet(match):
     caption = match[1]
     path = re.search(r'href="\.\./([^"]+)"',caption)[1]
+    excerpt = re.search(r'data-excerpt="([\w-]+)"', caption)
+    key = path + "#" + excerpt[1] if excerpt else path
     lines = (ROOT / path).read_text().splitlines()
     parts, ranges = [], []
-    for first, last, context in SNIPPETS[path]:
+    for first, last, context in SNIPPETS[key]:
         start = line_number(lines,first,line_number(lines,context) if context == "async fn clock(" else 0)
         end_after = start
         if context and context != "async fn clock(":
@@ -36,7 +47,10 @@ def snippet(match):
         indent = min(len(line)-len(line.lstrip()) for line in segment if line.strip())
         if parts: parts.append('<span class="cl omitted"><i>···</i><span>⋯</span></span>')
         for i, line in enumerate(segment,start+1):
-            css = "cl hot" if any(x in line for x in (".run(", "ctx.get", ".send_after(", "awakeable", "provider.check(", "Idempotency-Key")) else "cl"
+            highlight = line.lstrip().startswith("IF ") or any(
+                x in line for x in (".run(", "ctx.get", ".send_after(", "awakeable", "provider.check(", "Idempotency-Key")
+            )
+            css = "cl hot" if highlight else "cl"
             parts.append(f'<span class="{css}"><i>{i}</i><span>{html.escape(line[indent:],quote=False)}</span></span>')
         ranges.append(str(start+1) if start == end else f'{start+1}–{end+1}')
     caption = re.sub(r'(?<=>)[0-9–, ]+ ↗(?=</a>)',', '.join(ranges)+' ↗',caption)

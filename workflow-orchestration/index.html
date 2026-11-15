@@ -413,25 +413,6 @@ button {
   letter-spacing:-.4px;
   margin:12px 0 0
 }
-.eventchain {
-  display:flex;
-  align-items:center;
-  gap:14px;
-  margin:10px 0 20px;
-  font:18px var(--mono)
-}
-.eventchain span {
-  border:1px solid #b5c3ae;
-  padding:10px 14px;
-  border-radius:3px
-}
-.eventchain b {
-  font-weight:400
-}
-.compare>div:nth-child(2) .eventchain span:last-child {
-  background:#e3f4c5;
-  border-color:#a5c180
-}
 .choice h3 {
   margin-top:4px;
   font-size:40px
@@ -768,6 +749,9 @@ button {
   color:#beccba;
   line-height:1.36;
   margin-top:5px
+}
+.paper .annot p,.paper .annot .sidekey {
+  color:var(--muted)
 }
 .ink .bottomline {
   color:#d4dece
@@ -1202,14 +1186,6 @@ dialog button {
     font-size:18px;
     margin-top:14px
   }
-  .eventchain {
-    font-size:12px;
-    gap:6px;
-    margin:10px 0
-  }
-  .eventchain span {
-    padding:6px 9px
-  }
   .bottomline {
     font-size:17px;
     margin-top:22px;
@@ -1592,13 +1568,19 @@ dialog button {
 </section>
 
 <section id="limits" class="slide paper" data-title="Limit incoming commands and outgoing calls" data-section="Backpressure" data-short="1" data-minutes="2" data-long="2" aria-label="Limit incoming commands and outgoing calls" hidden>
-    <header class="slidehead"><h2>Limit incoming commands and outgoing calls</h2><p class="decklead">Admitting a workflow command and granting permission to contact a vendor are separate decisions. The local configuration gives each its own budget.</p></header>
-    <div class="compare"><div><div class="klabel">Ingress · per authenticated caller</div><h3>60 commands per calendar minute</h3><div class="eventchain"><span>61st command</span><b aria-hidden="true">→</b><span>HTTP 429</span></div><p>The response carries <code>Retry-After</code>. Case reads have a separate path.</p></div><div><div class="klabel">Dispatch · per check kind</div><h3>4 concurrent provider calls</h3><div class="eventchain"><span>4 slots busy</span><b aria-hidden="true">→</b><span>5th waits</span></div><p>Across workers, at most 60 attempts start in a rolling minute. Two vendors serving the same kind share that budget.</p></div></div><div class="bottomline"><i aria-hidden="true">↳</i><span>PostgreSQL owns the counters and leases. Adding another worker preserves the shared limit.</span></div>
+    <header class="slidehead"><h2>Limit incoming commands and outgoing calls</h2><p class="decklead">The API accepted the case. Four workers are already calling the provider. When can the fifth call start?</p></header>
+    <div class="code-col wide-source"><figure class="source">
+    <figcaption><span><b class="lang">SQL</b> ekyc_acquire_provider</span><a href="../adapters/postgres/migrations/0002_dispatch_limits.sql" data-excerpt="dispatch" target="_blank" rel="noopener" title="Open the PostgreSQL dispatch functions">97–99, 103–105 ↗</a></figcaption><pre><code><span class="cl hot"><i>97</i><span>IF active_count &gt;= p_max_in_flight THEN</span></span><span class="cl"><i>98</i><span>    RETURN least(250, ekyc_wait_ms(now_at, first_expiry));</span></span><span class="cl"><i>99</i><span>END IF;</span></span><span class="cl omitted"><i>···</i><span>⋯</span></span><span class="cl hot"><i>103</i><span>IF recent_count &gt;= p_per_minute THEN</span></span><span class="cl"><i>104</i><span>    RETURN ekyc_wait_ms(now_at, oldest_dispatch + interval '1 minute');</span></span><span class="cl"><i>105</i><span>END IF;</span></span></code></pre>
+    </figure><aside><div class="annot"><span class="sidekey">At the API · per caller</span><h3>60 commands per calendar minute</h3><p>The 61st gets HTTP 429 with <code>Retry-After</code>. Reads bypass this quota.</p></div><div class="annot"><span class="sidekey">At the vendor · per check kind</span><h3>4 concurrent calls</h3><p>Workers share 60 starts per rolling minute. A vendor’s <code>Retry-After</code> pauses calls of that kind.</p></div></aside></div>
+    <div class="bottomline"><i aria-hidden="true">↳</i><span>Both branches return a wait in milliseconds. The worker sleeps, then asks for a lease again.</span></div>
 </section>
 
 <section id="breaker" class="slide paper" data-title="A circuit breaker controls re-entry" data-section="Failure handling" data-short="2" data-minutes="2" data-long="2" aria-label="A circuit breaker controls re-entry" hidden>
-    <header class="slidehead"><h2>A circuit breaker controls re-entry</h2><p class="decklead">One operation can spend its retry budget. Failures across several operations can also open the circuit for the whole check kind.</p></header>
-    <div class="demo-split"><div><ol class="route"><li><b>Bound the attempt</b><span>A normal provider call has a 2.5-second timeout. The check has a 30-second deadline across attempts and waits.</span></li><li><b>Reuse the operation ID</b><span>Up to 3 attempts use exponential backoff with jitter. The vendor deduplicates the operation ID.</span></li><li><b>Honor vendor throttling</b><span>A vendor 429 supplies a shared cooldown through its Retry-After hint.</span></li></ol></div><section class="tracecard" aria-label="Circuit states · local configuration"><p class="trace-label">Circuit states · local configuration</p><h3>Recovery after transient failures</h3><dl><div><dt>Closed</dt><dd>Admit calls within the rate and concurrency limits.</dd></div><div><dt>Open</dt><dd>Three consecutive transient failures pause dispatch for 5 seconds.</dd></div><div><dt>Half-open</dt><dd>Admit one probe. Success closes the circuit. A transient failure opens it again.</dd></div></dl></section></div>
+    <header class="slidehead"><h2>A circuit breaker controls re-entry</h2><p class="decklead">After cooldown, two workers race for one probe lease. PostgreSQL locks the gate row while each checks.</p></header>
+    <div class="code-col wide-source"><figure class="source">
+    <figcaption><span><b class="lang">SQL</b> Acquire and finish a provider lease</span><a href="../adapters/postgres/migrations/0002_dispatch_limits.sql" data-excerpt="breaker" target="_blank" rel="noopener" title="Open the PostgreSQL circuit-breaker functions">94–96, 141–144 ↗</a></figcaption><pre><code><span class="cl hot"><i>94</i><span>IF gate.open_until IS NOT NULL AND active_probe_expiry IS NOT NULL THEN</span></span><span class="cl"><i>95</i><span>    RETURN least(250, ekyc_wait_ms(now_at, active_probe_expiry));</span></span><span class="cl"><i>96</i><span>END IF;</span></span><span class="cl omitted"><i>···</i><span>⋯</span></span><span class="cl hot"><i>141</i><span>IF p_failed AND (finished.probe OR gate.failures + 1 &gt;= p_threshold) THEN</span></span><span class="cl"><i>142</i><span>    UPDATE provider_gate SET failures = 0, generation = generation + 1,</span></span><span class="cl"><i>143</i><span>        open_until = now_at + p_cooldown_ms * interval '1 millisecond'</span></span><span class="cl"><i>144</i><span>        WHERE provider = p_provider;</span></span></code></pre>
+    </figure><aside><div class="annot"><span class="sidekey">On acquisition</span><h3>Admit one probe</h3><p>A second worker sees the active probe lease and waits. A successful probe closes the circuit.</p></div><div class="annot"><span class="sidekey">On completion</span><h3>Open for 5 seconds</h3><p>Three consecutive transient failures open the circuit. A transient probe failure restarts the cooldown.</p></div></aside></div>
+    <div class="bottomline"><i aria-hidden="true">↳</i><span>Up to 3 attempts reuse one operation ID with backoff and jitter. Each has a 2.5-second timeout within a 30-second deadline.</span></div>
 </section>
 
 <section id="callback" class="slide ink " data-title="Wait for an external callback" data-section="Durable waits" data-short="2" data-minutes="2" data-long="2" aria-label="Wait for an external callback" hidden>
@@ -1863,7 +1845,7 @@ const talkNotes = {
     "limits": {
         "beats": [
             "Imagine fifty workflows ready to contact the same provider. Look at the API boundary first. The standard local quota allows sixty command submissions per caller per calendar minute. An excess submission receives 429 and Retry-After. Reads bypass this quota.",
-            "At dispatch, PostgreSQL grants leases across workers. Four live leases exhaust the concurrent allowance. The kind also has a rolling rate of sixty dispatches per minute. Changing which vendor handles a face check retains that same face budget.",
+            "Read the two SQL returns. Four live leases make the fifth worker wait up to 250 milliseconds before checking again. Sixty starts in the trailing minute make it wait until the oldest one leaves the window. Changing which vendor handles a face check retains that same face budget.",
             "A single database row serializes lease decisions. Expiration releases a slot after worker loss. A worker that arrives late with an old token cannot safely treat that expired permission as current."
         ],
         "ask": "Where does a fifth provider call wait if the command that created it has already been accepted?",
@@ -1889,7 +1871,7 @@ const talkNotes = {
     },
     "breaker": {
         "beats": [
-            "Walk top to bottom through the state table. Three consecutive transient failures across the check kind open its breaker. After five seconds, one half-open probe can proceed. A successful probe closes the breaker. A transient failure triggers another cooldown. Generation fencing prevents an old completion from closing a newer open circuit.",
+            "In the upper SQL branch, a worker that finds an active probe gets a wait time. The check and the lease grant run under the same row lock. In the lower branch, either a failed probe or the third consecutive transient failure advances the generation and sets a new cooldown. A result from an older generation cannot close the newer circuit.",
             "Separately, one ordinary operation gets up to three HTTP attempts, with a 2.5-second transport timeout and a 30-second overall deadline. Retries use exponential backoff with jitter and the same business operation ID. A vendor throttling response supplies a shared backoff hint.",
             "These are the demo settings for standard submissions. The live callback adapter registers an external response and has its own one-hour wait window. Reconciliation later uses a separate polling path."
         ],
@@ -1903,6 +1885,10 @@ const talkNotes = {
             [
                 "Time limits and breaker settings",
                 "../adapters/restate/src/settings.rs"
+            ],
+            [
+                "Gate lock, probe acquisition and generation check",
+                "../adapters/postgres/migrations/0002_dispatch_limits.sql"
             ],
             [
                 "Half-open probe and stale completion test",

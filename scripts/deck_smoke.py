@@ -48,6 +48,38 @@ def advance_to(page, slide_id):
     raise AssertionError(f"The presenter route did not reach {slide_id}")
 
 
+def check_hosted_source(link, path):
+    expect(link).to_have_attribute("href", re.compile(r"^blob:"))
+    document = link.evaluate("async link => (await fetch(link.href)).text()")
+    # The hosted reader prepends a filename and line numbers to the checkout source.
+    heading, _, numbered_source = document.partition("\n\n")
+    assert heading == path
+    source = re.sub(r"^ *\d+  ", "", numbered_source, flags=re.MULTILINE)
+    assert source == (DECK.parents[1] / path).read_text()
+
+
+def inspect_reliability_sources(page):
+    path = "adapters/postgres/migrations/0002_dispatch_limits.sql"
+    for slide, decisions in {
+        "limits": ("active_count >= p_max_in_flight", "recent_count >= p_per_minute"),
+        "breaker": (
+            "active_probe_expiry IS NOT NULL",
+            "finished.probe OR gate.failures + 1 >= p_threshold",
+        ),
+    }.items():
+        advance_to(page, slide)
+        figure = page.locator(f"#{slide} figure.source")
+        code = figure.locator("pre code")
+        expect(code).to_be_visible()
+        for condition in decisions:
+            expect(code).to_contain_text(condition)
+        link = figure.get_by_role("link")
+        if page.url.startswith("file:"):
+            assert link.evaluate("a => a.href") == (DECK.parents[1] / path).as_uri()
+        else:
+            check_hosted_source(link, path)
+
+
 def capture_gallery(page):
     trigger = page.locator("#livewait button[data-open-capture]")
     expect(trigger).to_be_visible()
@@ -297,8 +329,10 @@ if __name__ == "__main__":
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.goto(DECK.as_uri() + "?" + query)
         controls(page)
+        inspect_reliability_sources(page)
         # A presenter can open the hosted talk without supplying local ports.
         page.goto(portal + "/talk/")
+        inspect_reliability_sources(page)
         advance_to(page, "livewait")
         restate_link = page.locator("#livewait").get_by_role("link", name="Restate UI")
         admin_ui = admin.rstrip("/") + "/ui/"
@@ -319,14 +353,7 @@ if __name__ == "__main__":
         recovery_link = page.locator("#recovery").get_by_role(
             "link", name="Inspect the recovery assertions", include_hidden=True
         )
-        recovery_path = "scripts/recovery_smoke.py"
-        # The hosted reader prepends a filename and line numbers to the checkout source.
-        expect(recovery_link).to_have_attribute("href", re.compile(r"^blob:"))
-        document = recovery_link.evaluate("async link => (await fetch(link.href)).text()")
-        heading, _, numbered_source = document.partition("\n\n")
-        assert heading == recovery_path
-        source = re.sub(r"^ *\d+  ", "", numbered_source, flags=re.MULTILINE)
-        assert source == (DECK.parents[1] / recovery_path).read_text()
+        check_hosted_source(recovery_link, "scripts/recovery_smoke.py")
         journey(page, portal, admin, args.capture)
         assert not errors, errors
         browser.close()
