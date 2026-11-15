@@ -1,0 +1,24 @@
+[package]
+name = "ekyc-restate"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "ekyc-worker"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+restate-sdk = "=0.13.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ekyc-domain = { path = "../../crates/domain" }
+ekyc-ports = { path = "../../crates/ports" }
+ekyc-http-transport = { path = "../../crates/http-transport" }
+ekyc-postgres = { path = "../postgres" }
+ekyc-provider-address = { path = "../provider-address" }
+ekyc-provider-document = { path = "../provider-document" }
+ekyc-provider-face = { path = "../provider-face" }
+ekyc-provider-sanctions = { path = "../provider-sanctions" }

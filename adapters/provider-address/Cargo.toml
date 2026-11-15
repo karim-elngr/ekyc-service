@@ -1,0 +1,13 @@
+[package]
+name = "ekyc-provider-address"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+ekyc-domain = { path = "../../crates/domain" }
+ekyc-ports = { path = "../../crates/ports" }
+ekyc-http-transport = { path = "../../crates/http-transport" }
+serde = { version = "1", features = ["derive"] }

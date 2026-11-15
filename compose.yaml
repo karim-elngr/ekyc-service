@@ -1,0 +1,98 @@
+name: ekyc
+x-rust: &rust
+  image: ekyc-local:dev
+  build: .
+x-provider: &provider
+  image: ekyc-mock:dev
+  build: ./mocks
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ekyc
+      POSTGRES_PASSWORD: local-demo-only
+      POSTGRES_DB: ekyc
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ekyc -d ekyc"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  restate:
+    image: restatedev/restate:1.8.1
+    ports: ["127.0.0.1:9070:9070"]
+    volumes: [restatedata:/restate-data]
+  document:
+    <<: *provider
+    command: ["document"]
+  face:
+    <<: *provider
+    command: ["face"]
+  address:
+    <<: *provider
+    command: ["address"]
+  sanctions:
+    <<: *provider
+    command: ["sanctions"]
+  worker:
+    <<: *rust
+    command: ["ekyc-worker"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      document: {condition: service_started}
+      face: {condition: service_started}
+      address: {condition: service_started}
+      sanctions: {condition: service_started}
+    environment:
+      DATABASE_URL: &db postgres://ekyc:local-demo-only@postgres/ekyc
+      DOCUMENT_URL: http://document:8080
+      FACE_URL: http://face:8080
+      ADDRESS_URL: http://address:8080
+      SANCTIONS_URL: http://sanctions:8080
+      MAX_ATTEMPTS: "3"
+      CASE_DEADLINE_MS: "30000"
+      CHECK_TIMEOUT_MS: "2500"
+      PROVIDER_PER_MINUTE: "60"
+      PROVIDER_MAX_IN_FLIGHT: "4"
+  register:
+    image: python:3.12-alpine
+    depends_on: [restate, worker]
+    volumes: ["./scripts/register.py:/register.py:ro"]
+    command: ["python3", "/register.py", "http://restate:9070", "http://worker:9080"]
+  api:
+    <<: *rust
+    command: ["ekyc-api"]
+    ports: ["127.0.0.1:8090:8090"]
+    depends_on:
+      register: {condition: service_completed_successfully}
+      postgres: {condition: service_healthy}
+    environment:
+      DATABASE_URL: *db
+      RESTATE_INGRESS_URL: http://restate:8080
+      ADMISSION_PER_MINUTE: "60"
+      EKYC_CLIENTS: >-
+        [{"id":"demo","token":"local-demo-onboarding","purposes":["full_onboarding","address_refresh"]},
+        {"id":"partner","token":"local-demo-refresher","purposes":["address_refresh"]},
+        {"id":"quota-test","token":"local-demo-quota-test","purposes":["address_refresh"]}]
+  webhook:
+    <<: *rust
+    command: ["ekyc-webhook"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      webhook-sink: {condition: service_started}
+    environment:
+      DATABASE_URL: *db
+      WEBHOOK_URL: http://webhook-sink:8110/events
+      WEBHOOK_TOKEN: local-demo-events-token
+  webhook-sink:
+    image: python:3.12-alpine
+    ports: ["127.0.0.1:8110:8110"]
+    volumes: ["./mocks/webhook_sink.py:/sink.py:ro", "sinkdata:/data"]
+    command: ["python3", "-u", "/sink.py"]
+    environment:
+      WEBHOOK_TOKEN: local-demo-events-token
+      WEBHOOK_DB: /data/events.sqlite3
+volumes:
+  pgdata: {}
+  restatedata: {}
+  sinkdata: {}

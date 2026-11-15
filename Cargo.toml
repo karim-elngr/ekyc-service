@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+    "apps/http-api",
+    "crates/domain",
+    "crates/ports",
+    "crates/http-transport",
+    "adapters/restate",
+    "adapters/restate-ingress",
+    "adapters/webhook-events",
+    "adapters/postgres",
+    "adapters/provider-document",
+    "adapters/provider-face",
+    "adapters/provider-address",
+    "adapters/provider-sanctions",
+]
