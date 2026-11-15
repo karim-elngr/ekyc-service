@@ -11,3 +11,6 @@ ekyc-domain = { path = "../../crates/domain" }
 ekyc-ports = { path = "../../crates/ports" }
 ekyc-http-transport = { path = "../../crates/http-transport" }
 serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }

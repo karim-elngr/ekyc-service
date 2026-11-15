@@ -120,13 +120,14 @@ function ProviderSettings({ preset, fixtures, change, reset, busy }) {
   );
 }
 
-export function ScenarioLab({ changed }) {
-  const [run, setRun] = useState(() => readStoredRun(activeStorage));
+export function ScenarioLab({ changed, initialPreset }) {
+  const requested = presets.find(item => item.id === initialPreset);
+  const [run, setRun] = useState(() => requested ? null : readStoredRun(activeStorage));
   const [draft, setDraft] = useState(() =>
-    run ? null : readStoredRun(pendingStorage),
+    run || requested ? null : readStoredRun(pendingStorage),
   );
   const [selected, setSelected] = useState(
-    run?.preset || draft?.preset || "direct-loan",
+    run?.preset || draft?.preset || requested?.id || "direct-loan",
   );
   const preset = presets.find((item) => item.id === selected);
   const [fixtures, setFixtures] = useState(

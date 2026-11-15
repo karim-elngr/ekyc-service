@@ -18,7 +18,7 @@ pub struct Investigation {
 const OPEN: &str = "SELECT w.work_id,w.kind,w.case_id,w.product,w.operation_id,w.state,w.opened_at,
        a.acknowledged_by,a.acknowledged_at FROM staff_current_work w
        LEFT JOIN staff_work_acknowledgement a USING(work_id)
-       WHERE w.institution=$1 AND w.product=$2 AND (w.kind='screening_review' OR a.work_id IS NULL)";
+       WHERE w.institution=$1 AND w.product=$2 AND ((w.kind='screening_review' AND w.state NOT IN ('APPROVED','REJECTED')) OR a.work_id IS NULL)";
 const ACKNOWLEDGED: &str =
     "SELECT a.work_id,a.kind,a.case_id,c.product,a.operation_id,c.state,a.opened_at,
        a.acknowledged_by,a.acknowledged_at FROM staff_work_acknowledgement a

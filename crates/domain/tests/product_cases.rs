@@ -31,6 +31,7 @@ fn evidence(kind: CheckKind) -> BoundEvidence {
 }
 fn bindings() -> BindingSnapshot {
     BindingSnapshot {
+        provider_candidates: Default::default(),
         current_document_revision: Some("doc1".into()),
         current_portrait_revision: Some("portrait1".into()),
         screening: Some(evidence(CheckKind::Sanctions)),
@@ -914,4 +915,193 @@ fn delayed_old_pass_cannot_displace_newer_adverse_evaluation() {
         .collect();
     let legacy = open("lending", &[], &unordered, received);
     assert_eq!(legacy.checks[&Face].origin, None);
+}
+
+#[test]
+fn strict_screening_policy_is_separately_selectable() {
+    let policy = Policy::load("lending", "strict_screening").expect("strict screening pilot");
+    assert_ne!(
+        policy.version,
+        Policy::load("lending", "loan_application").unwrap().version
+    );
+}
+
+fn strict_case() -> ProductCase {
+    let policy = Policy::load("lending", "strict_screening").unwrap();
+    let mut snapshot = serde_json::to_value(bindings()).unwrap();
+    let mut a = evidence(CheckKind::Sanctions);
+    a.provider = "sanctions-a".into();
+    let mut b = a.clone();
+    b.provider = "sanctions-b".into();
+    b.provider_ref = "b-authorized-locator".into();
+    snapshot["provider_candidates"] = serde_json::json!({"sanctions": [a,b]});
+    let mut case = ProductCase::open(
+        "strict-1".into(),
+        "bank".into(),
+        "customer".into(),
+        policy,
+        [(CheckKind::Document, evidence(CheckKind::Document))].into(),
+        &[],
+        serde_json::from_value(snapshot).unwrap(),
+        now(),
+    )
+    .unwrap();
+    record(
+        &mut case,
+        CheckKind::Document,
+        good(CheckKind::Document),
+        now(),
+    );
+    case
+}
+
+#[test]
+fn strict_replacement_clear_remains_held_until_original_resolves() {
+    let mut case = strict_case();
+    let original = case.checks[&CheckKind::Sanctions]
+        .operation_id
+        .clone()
+        .unwrap();
+    record(
+        &mut case,
+        CheckKind::Sanctions,
+        Observation::Unavailable,
+        now(),
+    );
+    assert_eq!(
+        case.checks[&CheckKind::Sanctions]
+            .evidence
+            .as_ref()
+            .unwrap()
+            .provider,
+        "sanctions-b"
+    );
+    record(
+        &mut case,
+        CheckKind::Sanctions,
+        good(CheckKind::Sanctions),
+        now(),
+    );
+    assert_eq!(case.state, CaseState::ProviderBlocked);
+    let mut hit = case.clone();
+    hit.record_screen_lookup(&original, ScreenOutcome::Hit, now(), now(), now())
+        .unwrap();
+    assert_eq!(hit.state, CaseState::AwaitingReview);
+    let prior = hit.clone();
+    hit.record_screen_lookup(&original, ScreenOutcome::Hit, now(), now(), now())
+        .unwrap();
+    assert_eq!(hit, prior);
+    hit.review_original(
+        &original,
+        ReviewAction::Confirm,
+        "reviewer",
+        "confirmed identity",
+        "file-1",
+        now(),
+    )
+    .unwrap();
+    assert_eq!(hit.state, CaseState::Rejected);
+    for result in [ScreenOutcome::Clear, ScreenOutcome::NotAccepted] {
+        let mut resolved = case.clone();
+        resolved
+            .record_screen_lookup(&original, result, now(), now(), now())
+            .unwrap();
+        assert_eq!(resolved.state, CaseState::Approved);
+    }
+    case.record_screen_lookup(&original, ScreenOutcome::Inconclusive, now(), now(), now())
+        .unwrap();
+    assert_eq!(case.state, CaseState::AwaitingReview);
+    case.review_original(
+        &original,
+        ReviewAction::Clear,
+        "reviewer",
+        "resolved inconclusive screen",
+        "file-2",
+        now(),
+    )
+    .unwrap();
+    assert_eq!(case.state, CaseState::Approved);
+}
+
+#[test]
+fn strict_both_ambiguous_reconciles_each_vendor_after_submission_expires() {
+    let mut case = strict_case();
+    let a = case.checks[&CheckKind::Sanctions]
+        .operation_id
+        .clone()
+        .unwrap();
+    record(
+        &mut case,
+        CheckKind::Sanctions,
+        Observation::Unavailable,
+        now(),
+    );
+    let b = case.checks[&CheckKind::Sanctions]
+        .operation_id
+        .clone()
+        .unwrap();
+    record(
+        &mut case,
+        CheckKind::Sanctions,
+        Observation::Unavailable,
+        now(),
+    );
+    let late = now() + Duration::hours(1);
+    for result in [
+        ScreenOutcome::Clear,
+        ScreenOutcome::Hit,
+        ScreenOutcome::Inconclusive,
+        ScreenOutcome::NotAccepted,
+    ] {
+        let mut found = case.clone();
+        found
+            .record_screen_lookup(&b, result, late, late, late)
+            .unwrap();
+        assert_ne!(found.state, CaseState::Approved);
+        found
+            .record_screen_lookup(&a, ScreenOutcome::Clear, late, late, late)
+            .unwrap();
+        match result {
+            ScreenOutcome::Hit | ScreenOutcome::Inconclusive => {
+                assert_eq!(found.state, CaseState::AwaitingReview);
+                found
+                    .review_original(
+                        &b,
+                        ReviewAction::Confirm,
+                        "reviewer",
+                        "confirmed replacement",
+                        "b-review",
+                        late,
+                    )
+                    .unwrap();
+                assert_eq!(found.state, CaseState::Rejected);
+            }
+            _ => assert_eq!(found.state, CaseState::Approved),
+        }
+    }
+}
+
+#[test]
+fn fenced_unsent_original_allows_linked_verified_replacement() {
+    let mut case = strict_case();
+    let original = case.checks[&CheckKind::Sanctions]
+        .operation_id
+        .clone()
+        .unwrap();
+    case.record_screen_lookup(&original, ScreenOutcome::NotAccepted, now(), now(), now())
+        .unwrap();
+    let b = case.checks[&CheckKind::Sanctions]
+        .operation_id
+        .clone()
+        .unwrap();
+    assert_eq!(
+        case.screen_obligations[&original]
+            .replacement_operation
+            .as_ref(),
+        Some(&b)
+    );
+    assert_eq!(case.state, CaseState::Running);
+    case.record_screen_lookup(&b, ScreenOutcome::Clear, now(), now(), now())
+        .unwrap();
+    assert_eq!(case.state, CaseState::Approved);
 }

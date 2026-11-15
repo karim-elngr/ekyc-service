@@ -7,23 +7,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DECK = ROOT / "workflow-orchestration/index.html"
-GATE_SQL = "adapters/postgres/migrations/0002_dispatch_limits.sql"
-# Start and end tokens select actual statements, including multi-line changes.
+GATE_SQL = "adapters/postgres/migrations/0010_provider_contracts.sql"
 SNIPPETS = {
-    GATE_SQL + "#dispatch": [
-        ("IF active_count >= p_max_in_flight", "END IF;", None),
-        ("IF recent_count >= p_per_minute", "END IF;", None),
+    "adapters/restate/src/attempts.rs#dispatch": [
+        (".service_client::<ProviderAttemptV2Client>()", ".call()", None),
     ],
     GATE_SQL + "#breaker": [
-        ("IF gate.open_until IS NOT NULL AND active_probe_expiry", "END IF;", None),
-        ("IF p_failed AND (finished.probe", "WHERE provider = p_provider;", None),
+        ("IF p_lane='submit' AND window_submits", "END IF;", None),
+        ("IF probe AND greatest", "IF probe AND greatest", None),
+        ("IF a.lane='submit' AND circuit.generation=a.generation", "circuit.probe_token=p_token", None),
     ],
     "adapters/restate/src/product.rs": [("Ok(ctx", ".into_inner())", "async fn clock(")],
     "adapters/restate/src/product/commands.rs": [('if let Some(receipt)', "}", 'return Err(conflict("idempotency_key_reused"));')],
     "adapters/restate/src/product/dispatch.rs": [("let provider = ctx", ".send_after(Duration::from_millis(deadline));", None)],
     "adapters/restate/src/interactive.rs": [("let (awakeable_id, callback)", "ctx.awakeable::<Json<Callback>>();", None),
                                            ("restate_sdk::select! {", "}", "result = ctx.sleep(budget)")],
-    "adapters/restate/src/checks.rs": [("tokio::time::timeout(", ".await", None)],
+    "adapters/restate/src/attempts.rs#wire": [("Action::Submit => provider", ".map(Answer::Facts)", None)],
     "adapters/webhook-events/src/delivery.rs": [("let result = client", ".await;", None)],
 }
 

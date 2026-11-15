@@ -31,6 +31,7 @@ enum Attempt {
 }
 
 pub(crate) struct ProviderChecks {
+    pub rules: crate::rules::Rules,
     pub store: Store,
     pub providers: BTreeMap<(CheckKind, String), Arc<dyn Provider>>,
     pub interactive: InteractiveMocks,
@@ -39,6 +40,20 @@ pub(crate) struct ProviderChecks {
 
 #[restate_sdk::service(ingress_private, client_visibility = "pub(crate)")]
 impl ProviderChecks {
+    #[handler]
+    async fn product_v2(&self, ctx: Context<'_>, input: Json<CheckJob>) -> HandlerResult<()> {
+        self.run_v2(&ctx, input.into_inner()).await
+    }
+
+    #[handler]
+    async fn reconcile_v2(
+        &self,
+        ctx: Context<'_>,
+        input: Json<crate::checks_v2::Recovery>,
+    ) -> HandlerResult<()> {
+        self.recover_v2(&ctx, input.into_inner()).await
+    }
+
     #[handler]
     async fn product(&self, ctx: Context<'_>, input: Json<CheckJob>) -> HandlerResult<()> {
         let job = input.into_inner();
@@ -84,6 +99,7 @@ impl ProviderChecks {
                     observation,
                     observed_at,
                     received_at: Some(received_at),
+                    callback_invocation: None,
                 }))
                 .send();
         }
@@ -135,6 +151,7 @@ impl ProviderChecks {
                         observation: result.result,
                         observed_at: result.evaluated_at,
                         received_at: Some(received_at),
+                        callback_invocation: None,
                     }))
                     .send();
             }
@@ -159,7 +176,7 @@ pub(crate) struct OutstandingScreen {
     poll: u32,
 }
 
-async fn clock(ctx: &Context<'_>) -> HandlerResult<DateTime<Utc>> {
+pub(crate) async fn clock(ctx: &Context<'_>) -> HandlerResult<DateTime<Utc>> {
     Ok(ctx
         .run(|| async { Ok(Json(Utc::now())) })
         .name("product-receipt-clock")
@@ -335,7 +352,7 @@ impl ProviderChecks {
     }
 }
 
-fn retry_delay(base: u64, attempt: u32, seed: u64, retry_after: Option<u64>) -> u64 {
+pub(crate) fn retry_delay(base: u64, attempt: u32, seed: u64, retry_after: Option<u64>) -> u64 {
     let exponential = base.saturating_mul(1_u64 << attempt.saturating_sub(1).min(16));
     // Equal jitter, deterministic for a replayed invocation.
     let half = exponential / 2;

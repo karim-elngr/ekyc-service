@@ -7,6 +7,7 @@ use std::fs;
 fn provider_budget_begins_on_input_and_a_pending_operation_dispatches_once() {
     let now = Utc::now();
     let bindings = BindingSnapshot {
+        provider_candidates: Default::default(),
         current_document_revision: Some("document-v1".into()),
         current_portrait_revision: Some("portrait-v1".into()),
         screening: None,
@@ -73,6 +74,7 @@ fn one_late_screening_alert_survives_timeout_and_prior_nonpositive_deliveries() 
         observation: Observation::Sanctions { hit: true },
         observed_at: now,
         received_at: Some(now),
+        callback_invocation: None,
     };
     assert!(positive.is_positive_screen());
     assert_eq!(
@@ -97,6 +99,8 @@ fn one_late_screening_alert_survives_timeout_and_prior_nonpositive_deliveries() 
 #[test]
 fn evidence_can_only_name_the_provider_registered_for_its_kind() {
     let mut snap = EvidenceSnapshot {
+        version: None,
+        provider_candidates: BTreeMap::new(),
         evidence: BTreeMap::from([(
             CheckKind::Address,
             BoundEvidence {
@@ -232,6 +236,7 @@ fn interactive_deadline_is_per_attempt_and_other_provider_budgets_stay_short() {
         inputs,
         &[],
         BindingSnapshot {
+            provider_candidates: Default::default(),
             current_document_revision: Some("document-v1".into()),
             current_portrait_revision: Some("portrait-v1".into()),
             screening: None,
@@ -286,6 +291,7 @@ fn a_match_already_waiting_for_review_is_kept_as_an_alert_when_identity_is_super
         ..doc.clone()
     };
     let bindings = BindingSnapshot {
+        provider_candidates: Default::default(),
         current_document_revision: Some("doc1".into()),
         current_portrait_revision: Some("face1".into()),
         screening: Some(screen),
@@ -372,6 +378,7 @@ fn issuer_method_drift_settles_positive_and_deadline_results_as_retryable() {
         ..doc.clone()
     };
     let bindings = BindingSnapshot {
+        provider_candidates: Default::default(),
         current_document_revision: Some("doc1".into()),
         current_portrait_revision: None,
         screening: Some(screening),
@@ -408,6 +415,7 @@ fn issuer_method_drift_settles_positive_and_deadline_results_as_retryable() {
     ] {
         let mut case = pending.clone();
         let result = ProductResult {
+            callback_invocation: None,
             operation: Operation {
                 kind: CheckKind::Sanctions,
                 id: "case/sanctions/1".into(),
@@ -429,4 +437,23 @@ fn issuer_method_drift_settles_positive_and_deadline_results_as_retryable() {
             Some("case/sanctions/2")
         );
     }
+}
+
+#[test]
+fn delivered_callback_finishes_while_superseded_flights_and_deadlines_remain_cancellable() {
+    let mut flight = Flight {
+        operation_id: "address/2".into(),
+        deadline_ms: 1000,
+        callback_invocation: Some("waiting-callback".into()),
+        expiry_invocation: Some("deadline-timer".into()),
+    };
+    flight.delivered_by("address/1", "waiting-callback");
+    flight.delivered_by("address/2", "other-callback");
+    assert_eq!(
+        flight.callback_invocation.as_deref(),
+        Some("waiting-callback")
+    );
+    flight.delivered_by("address/2", "waiting-callback");
+    assert!(flight.callback_invocation.is_none());
+    assert_eq!(flight.expiry_invocation.as_deref(), Some("deadline-timer"));
 }

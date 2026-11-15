@@ -77,7 +77,7 @@ impl ProductCase {
                 }
             })
             .collect();
-        let reasons = self
+        let mut reasons: Vec<_> = self
             .checks
             .values()
             .flat_map(|check| {
@@ -87,9 +87,38 @@ impl ProductCase {
                 })
             })
             .collect();
+        let waiting = self
+            .screen_obligations
+            .values()
+            .any(|h| h.outcome.is_none());
+        let investigate = self
+            .screen_obligations
+            .values()
+            .any(super::ScreenObligation::awaiting_disposition);
+        if waiting || investigate {
+            reasons.push(PublicReason {
+                check: CheckKind::Sanctions,
+                code: if investigate {
+                    "ORIGINAL_SCREENING_REVIEW"
+                } else {
+                    "ORIGINAL_SCREENING_OUTSTANDING"
+                }
+                .into(),
+            });
+        }
         let next_action = match self.state {
             CaseState::Running => Some("wait_for_provider"),
             CaseState::AwaitingEvidence => Some("provide_evidence"),
+            CaseState::ProviderBlocked if waiting => Some("await_original_screening"),
+            CaseState::ProviderBlocked
+                if self.routed_address()
+                    && self
+                        .checks
+                        .get(&CheckKind::Address)
+                        .is_some_and(|s| s.status == CheckStatus::Blocked) =>
+            {
+                Some("contact_provider_operations")
+            }
             CaseState::ProviderBlocked => Some("retry"),
             CaseState::AwaitingReview => Some("review"),
             CaseState::Approved | CaseState::Rejected => None,

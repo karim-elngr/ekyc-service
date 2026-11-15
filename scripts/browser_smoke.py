@@ -202,6 +202,29 @@ def verify_staff_deployment(browser, case):
         page.close()
 
 
+def verify_routing_staff(browser):
+    page = browser.new_page()
+    try:
+        page.goto(PORTAL + "/#lab?preset=routing")
+        visible(page.get_by_label("Scenario", exact=True)).to_have_value("routing")
+        with page.expect_response(lambda r: r.request.method == "POST" and
+                                  urlsplit(r.url).path == "/product-demo/wallet/cases") as receipt:
+            page.get_by_role("button", name="Start case").click()
+        assert receipt.value.status == 202, receipt.value.text()
+        case = receipt.value.json()["case_id"]
+        read(case, WALLET, lambda view: view["state"] == "APPROVED")
+        sign_in(page, "local-demo-routing-operator")
+        visible(page.get_by_role("heading", name="Address provider traffic")).to_be_visible()
+        page.get_by_label("Find routes by exact case ID").fill(case)
+        visible(page.get_by_role("link", name=case, exact=True)).to_be_visible()
+        page.get_by_label("Traffic action").select_option("normal")
+        page.get_by_label("Reason", exact=True).fill("Browser rehearsal restored the normal pilot policy")
+        page.get_by_role("button", name="Apply traffic change").click()
+        visible(page.get_by_text("Traffic change recorded.")).to_be_visible()
+    finally:
+        page.close()
+
+
 def main():
     with sync_playwright() as driver:
         browser = driver.chromium.launch(
@@ -209,6 +232,7 @@ def main():
         )
         try:
             exercise_reference(browser)
+            verify_routing_staff(browser)
             case, op = start_case(browser)
             verify_staff_deployment(browser, case)
             review(browser, {"width": 1280, "height": 720}, "reviewer-alice", "clear", case, op)

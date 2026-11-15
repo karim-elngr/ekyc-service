@@ -49,6 +49,7 @@ pub(super) fn open(
         "loan_application"
     };
     let snapshot = BindingSnapshot {
+        provider_candidates: Default::default(),
         current_document_revision: Some("id-3".into()),
         current_portrait_revision: Some("portrait-3".into()),
         screening: Some(asset(CheckKind::Sanctions)),

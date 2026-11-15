@@ -16,8 +16,8 @@ SHARED_FIXTURES = {
 SPECIFIC_FIXTURES = {
     "document": {"expired", "threshold"},
     "face": {"threshold", "held-pass"},
-    "address": {"stale", "threshold"},
-    "sanctions": {"hit", "inconclusive", "held-hit"},
+    "address": {"stale", "threshold", "held-pass", "lost-held-pass"},
+    "sanctions": {"hit", "inconclusive", "held-hit", "held-pass"},
 }
 
 

@@ -13,6 +13,33 @@ class EvidenceRegistryTests(unittest.TestCase):
     def issue(self, key, kind, **kwargs):
         return self.reg.issue(key, dict(self.owner, kind=kind, **kwargs))["evidence_ref"]
 
+    def test_address_authorizations_are_fixed_at_issue_and_v2_remains_a_single_binding(self):
+        ref = self.issue("pilot", "address", providers=["address-a", "address-b"])
+        request = dict(self.owner, evidence={"address": ref})
+        old = self.reg.resolve(request)
+        self.assertNotIn("provider_candidates", old)
+        new = self.reg.resolve(request, version=3)
+        candidates = new["provider_candidates"]["address"]
+        self.assertEqual([item["provider_ref"] for item in candidates],
+                         ["demo:address-a:pass", "demo:address-b:pass"])
+        self.assertEqual({item["revision"] for item in candidates}, {ref})
+        self.assertEqual({item["method"] for item in candidates},
+                         {"address_verification_a", "address_verification_b"})
+        self.assertEqual(new["evidence"]["address"], candidates[0])
+        with self.assertRaises(Invalid):
+            self.issue("unknown", "address", providers=["unknown"])
+        with self.assertRaises(Invalid):
+            self.reg.resolve(dict(request, institution="foreign"), version=3)
+
+    def test_strict_screening_binds_both_vendors_to_one_document_only_when_requested(self):
+        doc = self.issue("strict", "document", strict_screening=True, screening_scenario="held-hit")
+        candidates = self.reg.resolve(dict(self.owner, evidence={}), version=3)["provider_candidates"]["sanctions"]
+        self.assertEqual([c["provider_ref"] for c in candidates], ["demo:sanctions-a:held-hit", "demo:sanctions-b:pass"])
+        self.assertEqual({c["document_revision"] for c in candidates}, {doc})
+        self.issue("normal", "document")
+        next_screen = self.reg.resolve(dict(self.owner, evidence={}), version=3)["provider_candidates"]["sanctions"]
+        self.assertEqual([c["provider"] for c in next_screen], ["sanctions"])
+
     def test_binding_replay_and_version_replacement(self):
         doc = self.issue("one", "document")
         self.assertEqual(self.issue("one", "document"), doc)

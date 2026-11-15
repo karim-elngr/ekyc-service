@@ -20,6 +20,8 @@ pub struct ProductCase {
     pub created_at: DateTime<Utc>,
     pub decided_at: Option<DateTime<Utc>>,
     pub reviews: Vec<ReviewRecord>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub screen_obligations: BTreeMap<String, super::ScreenObligation>,
 }
 
 impl ProductCase {
@@ -92,6 +94,7 @@ impl ProductCase {
             created_at: now,
             decided_at: None,
             reviews: Vec::new(),
+            screen_obligations: BTreeMap::new(),
         };
         case.advance(now);
         Ok(case)
@@ -229,6 +232,11 @@ impl ProductCase {
     }
 
     pub(super) fn advance(&mut self, now: DateTime<Utc>) {
+        let strict = self.strict_screening();
+        let primary = match &self.policy.strict_screen {
+            Some(policy) => self.screening_candidate(&policy.primary),
+            None => self.bindings.screening.clone(),
+        };
         for rule in &self.policy.checks {
             let check = self
                 .checks
@@ -237,11 +245,15 @@ impl ProductCase {
             let binding_changed = check.evidence.as_ref().is_some_and(|asset| {
                 !asset.matches(&self.tenant_id, &self.subject_ref, rule, &self.bindings)
                     || (rule.kind == CheckKind::Sanctions
-                        && !self
-                            .bindings
-                            .screening
-                            .as_ref()
-                            .is_some_and(|current| asset.same_screening_identity(current)))
+                        && !self.bindings.screening.as_ref().is_some_and(|current| {
+                            if strict {
+                                asset.evidence_ref == current.evidence_ref
+                                    && asset.revision == current.revision
+                                    && asset.document_revision == current.document_revision
+                            } else {
+                                asset.same_screening_identity(current)
+                            }
+                        }))
             });
             if binding_changed {
                 check.clear("EVIDENCE_SUPERSEDED");
@@ -254,7 +266,7 @@ impl ProductCase {
                 if check.origin == Some(Origin::Reused) && !rule.reuse_allows(fact, now) {
                     check.clear("REUSE_EXPIRED");
                 } else {
-                    let assessment = rule.assess(&fact.observation, now);
+                    let assessment = rule.assess(&fact.evidence, &fact.observation, now);
                     if assessment.status != CheckStatus::Passed {
                         check.status = assessment.status;
                         check.reasons = assessment.reasons;
@@ -274,7 +286,7 @@ impl ProductCase {
                 && screen.operation_id.is_none()
                 && screen.status != CheckStatus::Blocked
             {
-                if let Some(identity) = self.bindings.screening.clone() {
+                if let Some(identity) = primary {
                     screen.start(&self.case_id, identity);
                 } else {
                     screen.status = CheckStatus::Blocked;
@@ -282,6 +294,7 @@ impl ProductCase {
                 }
             }
         }
+        self.arm_screen(now);
         use CaseState::*;
         let has = |status| self.checks.values().any(|c| c.status == status);
         self.state =
@@ -300,6 +313,7 @@ impl ProductCase {
             } else {
                 Approved
             };
+        self.guard_screening_decision();
         if self.is_terminal() {
             self.decided_at = Some(now);
         }

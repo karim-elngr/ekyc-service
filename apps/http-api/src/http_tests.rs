@@ -82,6 +82,7 @@ async fn protected_routes_share_scopes_and_expose_only_public_history(pool: PgPo
             };
             case.refresh_bindings(
                 BindingSnapshot {
+                    provider_candidates: Default::default(),
                     current_document_revision: Some("id".into()),
                     ..BindingSnapshot::default()
                 },

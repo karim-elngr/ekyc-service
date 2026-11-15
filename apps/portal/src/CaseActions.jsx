@@ -59,6 +59,23 @@ function Record({ title, subtitle, status, children }) {
 export function ReviewRecords({ data }) {
   return (
     <>
+      {data.screening_obligations?.length > 0 && (
+        <section className="ci-record-group">
+          <h4>Screening operations</h4>
+          {data.screening_obligations.map((hold) => (
+            <Record key={hold.original_operation} title={hold.provider}
+              subtitle={hold.outcome ? readable(hold.outcome) : "Awaiting vendor result"}>
+              <Fields entries={[
+                ["Vendor operation", hold.original_operation, true],
+                ["Replacement operation", hold.replacement_operation, true],
+                ["Evidence revision", hold.evidence_revision, true],
+                ["Assigned to", hold.assigned_to],
+                ["Assignment due", dateTime(hold.assign_at)],
+              ]} />
+            </Record>
+          ))}
+        </section>
+      )}
       {data.alerts?.length > 0 && (
         <section className="ci-record-group">
           <h4>
@@ -130,7 +147,8 @@ export function ReviewRecords({ data }) {
           ))}
         </section>
       )}
-      {!data.checks?.length &&
+      {!data.screening_obligations?.length &&
+        !data.checks?.length &&
         !data.reviews?.length &&
         !data.alerts?.length && (
           <p className="ci-note">No reviewer records yet.</p>
@@ -285,6 +303,17 @@ export function ReviewerPanel({ view, task, execute, busy, token }) {
           Loading reviewer records…
         </p>
       )}
+      {!terminal(view) && read.data?.screening_obligations?.filter(
+        (hold) => ["hit", "inconclusive"].includes(hold.outcome) && !hold.review &&
+          hold.original_operation !== record?.operation_id,
+      ).map((hold) => (
+        <section key={hold.original_operation}>
+          <h4>Review screening at {hold.provider}</h4>
+          <p>{hold.original_operation}</p>
+          <DispositionForm operation={hold.original_operation} path={path} token={token}
+            execute={execute} busy={busy || Boolean(read.error)} />
+        </section>
+      ))}
       {record && (
         <DispositionForm
           key={record.operation_id}

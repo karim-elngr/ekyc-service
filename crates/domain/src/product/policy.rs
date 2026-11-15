@@ -12,6 +12,17 @@ pub struct Policy {
     pub use_case: String,
     pub version: String,
     pub checks: Vec<Rule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strict_screen: Option<StrictScreenPolicy>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StrictScreenPolicy {
+    pub primary: String,
+    pub replacement: String,
+    pub owner: String,
+    pub assign_after_ms: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -23,6 +34,8 @@ pub struct Rule {
     pub min_similarity: Option<f64>,
     pub max_proof_age_days: Option<u32>,
     pub reuse: Option<Reuse>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<super::AddressRouting>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -44,10 +57,14 @@ pub fn valid_slug(value: &str) -> bool {
 impl Policy {
     pub fn load(product: &str, use_case: &str) -> Result<Self, String> {
         for definition in [
+            include_str!("../../policies/wallet-address-pilot-v1.json"),
+            include_str!("../../policies/wallet-address-priority-v1.json"),
+            include_str!("../../policies/wallet-address-replacement-v1.json"),
             include_str!("../../policies/wallet-onboarding-v1.json"),
             include_str!("../../policies/wallet-address-refresh-v1.json"),
             include_str!("../../policies/wallet-full-onboarding-v1.json"),
             include_str!("../../policies/lending-loan-application-v1.json"),
+            include_str!("../../policies/lending-strict-screening-v1.json"),
         ] {
             let policy = Self::from_json(definition)?;
             if policy.product == product && policy.use_case == use_case {
@@ -93,6 +110,13 @@ impl Policy {
             {
                 return Err(format!("invalid rule for {}", rule.kind.as_str()));
             }
+            if rule
+                .routing
+                .as_ref()
+                .is_some_and(|r| self.checks.len() != 1 || !r.validate(rule))
+            {
+                return Err("invalid address routing policy".into());
+            }
             if let Some(reuse) = &rule.reuse {
                 if !matches!(rule.kind, CheckKind::Document | CheckKind::Face)
                     || !nonempty_unique(&reuse.source_products)
@@ -106,6 +130,18 @@ impl Policy {
         if kinds.contains(&CheckKind::Sanctions) && !kinds.contains(&CheckKind::Document) {
             return Err("sanctions requires a verified document identity".into());
         }
+        if let Some(strict) = &self.strict_screen {
+            if !kinds.contains(&CheckKind::Sanctions)
+                || strict.primary != "sanctions-a"
+                || strict.replacement != "sanctions-b"
+                || ![&strict.primary, &strict.replacement, &strict.owner]
+                    .into_iter()
+                    .all(|s| valid_slug(s))
+                || strict.assign_after_ms == 0
+            {
+                return Err("invalid strict screening policy".into());
+            }
+        }
         Ok(())
     }
 }
@@ -114,7 +150,7 @@ impl Rule {
     pub fn accepts_source(&self, fact: &Fact, now: DateTime<Utc>) -> bool {
         fact.received_at.is_some()
             && fact.source_passed
-            && self.assess(&fact.observation, now).status == CheckStatus::Passed
+            && self.assess(&fact.evidence, &fact.observation, now).status == CheckStatus::Passed
     }
 
     pub fn matches_candidate(
@@ -170,7 +206,12 @@ impl Rule {
         })
     }
 
-    pub(super) fn assess(&self, observation: &Observation, now: DateTime<Utc>) -> Assessment {
+    pub(super) fn assess(
+        &self,
+        binding: &super::BoundEvidence,
+        observation: &Observation,
+        now: DateTime<Utc>,
+    ) -> Assessment {
         use CheckStatus::*;
         let mut reasons = Vec::new();
         let status = match (self.kind, observation) {
@@ -229,6 +270,15 @@ impl Rule {
                     proof_date,
                 },
             ) => {
+                let approved = self.routing.as_ref().and_then(|r| {
+                    r.roster
+                        .iter()
+                        .find(|c| binding.provider == c.provider && binding.method == c.method)
+                });
+                let maximum_age = approved
+                    .map(|r| r.max_proof_age_days)
+                    .or(self.max_proof_age_days);
+                let minimum_confidence = approved.map(|r| r.min_confidence).or(self.min_confidence);
                 let age = now
                     .date_naive()
                     .signed_duration_since(*proof_date)
@@ -236,7 +286,7 @@ impl Rule {
                 if age < 0 {
                     reasons.push("ADDRESS_PROOF_FUTURE");
                 }
-                if age > i64::from(self.max_proof_age_days.unwrap_or(0)) {
+                if age > i64::from(maximum_age.unwrap_or(0)) {
                     reasons.push("ADDRESS_PROOF_STALE");
                 }
                 if !passed {
@@ -245,7 +295,7 @@ impl Rule {
                 score(
                     &mut reasons,
                     *confidence,
-                    self.min_confidence,
+                    minimum_confidence,
                     "ADDRESS_CONFIDENCE_LOW",
                 );
                 AwaitingEvidence

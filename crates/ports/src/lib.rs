@@ -38,7 +38,7 @@ pub trait Provider: Send + Sync {
     /// Decode a successful vendor response, whether delivered inline or by callback.
     fn decode(&self, body: &[u8]) -> Result<Evaluated<Observation>, ProviderError>;
 
-    /// Read-only authoritative operation lookup, implemented by sanctions adapters.
+    /// Read-only authoritative operation lookup for supported address and sanctions vendors.
     async fn screening_result(
         &self,
         _operation_id: &str,

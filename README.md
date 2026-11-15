@@ -44,15 +44,15 @@ The walkthrough creates a unique customer, opens a loan with no evidence, follow
 
 ## Staff and presenter walkthroughs
 
-Open **Staff workspace** and sign in as `local-demo-reviewer-alice` or `local-demo-reviewer-sam` to investigate lending cases. The local observer credential is `local-demo-institution-observer`. The demo uses synthetic data. The institution supplies its own identities for staff deployments. [Staff intake and acknowledgement](docs/product-verification.md#staff-investigation-intake)
+Open **Staff workspace** and sign in as `local-demo-reviewer-alice` or `local-demo-reviewer-sam` to investigate lending cases. For the address pilot, sign in with `local-demo-routing-operator` and open **Provider routing** to inspect assignments, set a time-limited override and see outstanding operations. The local observer credential is `local-demo-institution-observer`. The demo uses synthetic data. The institution supplies its own identities for staff deployments. [Staff intake and acknowledgement](docs/product-verification.md#staff-investigation-intake)
 
 The engineering talk opens with a lost provider reply. It follows ownership of the next step, durable waits, replay, overload and the point where recovery depends on the external service. The eKYC demo gives the audience a running workflow and an invocation journal to inspect. [Presenter deck on the default local port](http://127.0.0.1:5173/talk/)
 
 ## Explore the database schema
 
-Open **Database schema** in the demo portal, or follow the link on the architecture slide. In Liam, search for `decision_outbox`, select the table, and inspect **Foreign key** to see how each published event refers to one `product_case_revision` by case ID and version. Select `provider_lease` to see how its dispatch records reference `provider_gate`. [Local Liam viewer](http://127.0.0.1:5173/schema/) · [Liam ERD](https://github.com/liam-hq/liam)
+Open **Database schema** in the demo portal, or follow the link on the architecture slide. In Liam, search for `decision_outbox`, select the table, and inspect **Foreign key** to see how each published event refers to one `product_case_revision` by case ID and version. Select `provider_attempt` to trace each admitted request to its quota bucket, breaker and spend reservation. [Local Liam viewer](http://127.0.0.1:5173/schema/) · [Liam ERD](https://github.com/liam-hq/liam)
 
-The portal build generates the diagram from a schema-only PostgreSQL export. It currently shows nine application tables and five foreign-key constraints. The underlying SQL also defines the `staff_current_work` view. No case records or database credentials are needed to browse. [Schema source](apps/portal/schema/structure.sql)
+The portal build generates the diagram from a schema-only PostgreSQL export. The release check compares its tables, columns and foreign keys with the migrated schema. The underlying SQL also defines the `staff_current_work` view. No case records or database credentials are needed to browse. [Schema source](apps/portal/schema/structure.sql)
 
 After applying migrations to a running demo, refresh the source and rebuild the portal. For a side-by-side deployment, set `COMPOSE_PROJECT_NAME` to its project name for both commands. With Podman, use `CONTAINER_ENGINE=podman make schema-refresh` and `podman compose`.
 

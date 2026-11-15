@@ -25,7 +25,9 @@ class Operation:
 
 
 class ProviderServer(ThreadingHTTPServer):
-    def __init__(self, address, provider, timeout_delay):
+    def __init__(self, address, provider, timeout_delay, vendor=None):
+        self.vendor = vendor
+        self.fault = "healthy"
         self.provider = provider
         self.timeout_delay = timeout_delay
         self.operations = {}
@@ -36,6 +38,9 @@ class ProviderServer(ThreadingHTTPServer):
         self.results = sqlite3.connect(db_path, check_same_thread=False)
         self.results.execute("""CREATE TABLE IF NOT EXISTS provider_results (
             id TEXT PRIMARY KEY, evidence TEXT, status INTEGER, result TEXT, held INTEGER NOT NULL)""")
+        self.results.execute("""CREATE TABLE IF NOT EXISTS vendor_wire (
+            id INTEGER PRIMARY KEY, operation_id TEXT NOT NULL, lane TEXT NOT NULL,
+            started REAL NOT NULL, ended REAL, status INTEGER)""")
         self.interactive = None
         super().__init__(address, Handler)
         ingress = os.environ.get("RESTATE_INGRESS_URL")
@@ -64,7 +69,13 @@ class ProviderServer(ThreadingHTTPServer):
         return self.interactive.choose(operation_id, response, reply)
 
     def evaluate(self, operation_key, evidence_ref):
-        prefix, separator, scenario = evidence_ref.partition(":")
+        locator = evidence_ref
+        if self.vendor:
+            vendor_prefix = f"demo:{self.vendor}:"
+            if not locator.startswith(vendor_prefix):
+                return Reply(422, {"error": "wrong_vendor_evidence"}), 0.0
+            locator = "demo:" + locator.removeprefix(vendor_prefix)
+        prefix, separator, scenario = locator.partition(":")
         if prefix != "demo" or not separator or not supports(self.provider, scenario):
             return Reply(422, {"error": "unknown_fixture"}), 0.0
 
@@ -93,7 +104,7 @@ class ProviderServer(ThreadingHTTPServer):
             # Save the answer before simulating a lost/slow response. A retry of
             # the logical operation can retrieve it while the first socket waits.
             evaluated = datetime.now(timezone.utc)
-            if scenario in {"held-hit", "held-pass"}:
+            if scenario in {"held-hit", "held-pass", "lost-held-pass"}:
                 previous.release = threading.Event()
             previous.terminal_reply = outcome(self.provider, scenario, evaluated)
             with self.results:
@@ -138,6 +149,11 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def reply(self, result):
+        if getattr(self, "wire", None):
+            with self.server.operation_lock, self.server.results:
+                self.server.results.execute("UPDATE vendor_wire SET ended=?, status=? WHERE id=?",
+                                           (time.time(), result.status, self.wire))
+            self.wire = None
         data = json.dumps(result.payload, separators=(",", ":")).encode()
         try:
             self.send_response(result.status)
@@ -154,6 +170,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             self.reply(Reply(200, {"provider": self.server.provider, "status": "ok", "operation_inspection": True}))
+        elif self.server.vendor and self.path == "/__mock__/ledger":
+            with self.server.operation_lock:
+                rows = self.server.results.execute("SELECT operation_id,lane,started,ended,status FROM vendor_wire ORDER BY id").fetchall()
+                saved = self.server.results.execute("SELECT id FROM provider_results WHERE status IS NOT NULL ORDER BY id").fetchall()
+            self.reply(Reply(200, {"requests":[dict(zip(("operation_id","lane","started","ended","status"),row)) for row in rows],
+                                  "executions":[row[0] for row in saved]}))
         elif self.path.startswith("/__mock__/interactive/") and self.server.interactive:
             self.interactive_operation(self.server.interactive.read)
         elif self.path.startswith("/__mock__/operations/"):
@@ -195,9 +217,15 @@ class Handler(BaseHTTPRequestHandler):
             if not self.server.release_held(operation_id):
                 return self.reply(Reply(404, {"error": "unknown_held_operation"}))
             return self.reply(Reply(200, {"released": True}))
+        if self.server.vendor and self.path.startswith("/__mock__/fault/"):
+            mode = self.path.rsplit("/", 1)[-1]
+            if mode not in ("healthy", "down", "slow", "throttled"):
+                return self.reply(Reply(422, {"error": "invalid_fault"}))
+            self.server.fault = mode
+            return self.reply(Reply(200, {"mode": mode}))
         path, input_field = ROUTES[self.server.provider]
         interactive = self.path.startswith("/__mock__/interactive/") and self.server.interactive
-        lookup = self.server.provider == "sanctions" and self.path == "/screenings/result"
+        lookup = (self.server.provider, self.path) in {("sanctions", "/screenings/result"), ("address", "/addresses/result")}
         if self.path != path and not interactive and not lookup:
             return self.reply(Reply(404, {"error": "unknown_route"}))
         key = self.headers.get("Idempotency-Key", "").strip()
@@ -210,6 +238,17 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(size))
         except (ValueError, UnicodeError, RecursionError):
             return self.reply(Reply(400, {"error": "invalid_json"}))
+        if self.server.vendor and not interactive:
+            with self.server.operation_lock, self.server.results:
+                self.wire = self.server.results.execute(
+                    "INSERT INTO vendor_wire(operation_id,lane,started) VALUES(?,?,?)",
+                    (key, "lookup" if lookup else "submit", time.time())).lastrowid
+            if not lookup and self.server.fault == "down":
+                return self.reply(Reply(503, {"error": "vendor_unavailable"}))
+            if not lookup and self.server.fault == "throttled":
+                return self.reply(Reply(429, {"error": "vendor_throttled"}, retry_after="1"))
+            if self.server.fault == "slow":
+                time.sleep(0.65)
         if lookup:
             if not isinstance(payload, dict) or payload != {"operation_id": key}:
                 return self.reply(Reply(422, {"error": "invalid_lookup"}))
@@ -224,7 +263,10 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(evidence_ref, str):
             return self.reply(Reply(422, {"error": "invalid_evidence_reference"}))
         result, delay = self.server.evaluate(key, evidence_ref)
-        if result.status == 200 and evidence_ref in {"demo:held-hit", "demo:held-pass"}:
+        if result.status == 200 and evidence_ref.endswith(":lost-held-pass"):
+            # The vendor committed the operation but the caller receives no authoritative answer.
+            return self.reply(Reply(503, {"error": "response_unavailable"}))
+        if result.status == 200 and evidence_ref.rsplit(":", 1)[-1] in {"held-hit", "held-pass"}:
             with self.server.operation_lock:
                 release = self.server.operations[key].release
             if release and not release.wait(timeout=60):
@@ -237,6 +279,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("provider", choices=ROUTES)
+    parser.add_argument("--vendor")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--timeout-delay", type=float, default=10.0,
@@ -244,7 +287,7 @@ def main():
     args = parser.parse_args()
     if not 0 <= args.timeout_delay <= 600:
         parser.error("--timeout-delay must be between 0 and 600 seconds")
-    with ProviderServer((args.host, args.port), args.provider, args.timeout_delay) as server:
+    with ProviderServer((args.host, args.port), args.provider, args.timeout_delay, args.vendor) as server:
         print(f"{args.provider} mock listening on port {server.server_port}", flush=True)
         try:
             server.serve_forever()

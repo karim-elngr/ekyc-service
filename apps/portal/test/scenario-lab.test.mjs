@@ -25,7 +25,7 @@ test("the launcher presents one grouped scenario choice and keeps provider overr
     /<select[^>]*id="lab-scenario"[^>]*>(.*?)<\/select>/s,
   )?.[1];
   assert.ok(picker, "scenario picker");
-  assert.equal([...picker.matchAll(/<option\b/g)].length, 9);
+  assert.equal([...picker.matchAll(/<option\b/g)].length, 10);
   assert.equal([...picker.matchAll(/<optgroup\b/g)].length, 3);
   assert.match(html, /<details[^>]*><summary/);
   assert.doesNotMatch(html, /<details[^>]*\bopen\b/);

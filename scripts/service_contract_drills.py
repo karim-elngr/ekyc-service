@@ -233,7 +233,7 @@ def main():
         assert expect(http("GET",url,token=rotated),200)[1] == before
 
         # The second Restate node shares no metadata or log volume with the project.
-        stack.start(unregistered,network,restate["Config"]["Image"],[9070])
+        stack.start(unregistered,network,restate["Config"]["Image"],[9070], {"RESTATE_ROCKSDB_TOTAL_MEMORY_SIZE": "256 MiB"})
         admin = stack.origin(unregistered,9070)
         until(admin + "/deployments",200)
         stack.start(fault_api, network, api["Config"]["Image"],[8090],
@@ -251,6 +251,7 @@ def main():
         catalog = {kind:{kind:worker_env[kind.upper()+"_URL"]} for kind in ("document","face","address","sanctions")}
         catalog["face"]["face-after"] = "http://" + face_after + ":8080"
         worker_env["EKYC_PROVIDER_CATALOG"] = json.dumps(catalog)
+        worker_env["RESTATE_ADMIN_URL"] = "http://" + unregistered + ":9070"
         worker_env["EKYC_EVIDENCE_URL"] = "http://" + sibling_issuer + ":9805"
         stack.start(sibling_worker,network,worker["Config"]["Image"],[],worker_env,["ekyc-worker"])
         register(admin,"http://" + sibling_worker + ":9080")

@@ -45,17 +45,33 @@ impl ProductCase {
                 if !valid_reference(subject_ref) {
                     return Err(invalid("invalid subject reference"));
                 }
-                let selected = self.policies.select(&command.product, use_case);
+                let selected =
+                    self.policies
+                        .select(&command.product, use_case)
+                        .and_then(|policy| {
+                            if (policy.strict_screen.is_some()
+                                || policy.checks.iter().any(|r| r.routing.is_some()))
+                                && std::env::var("EKYC_ROUTING_INSTITUTION").ok().as_deref()
+                                    != Some(&command.institution)
+                            {
+                                return Err(
+                                    "provider pilot is disabled for this institution".into()
+                                );
+                            }
+                            Ok(policy)
+                        });
                 let retry = self.retry;
                 let (policy, retry) = ctx
                     .run(move || async move { Ok(Json((selected.map_err(invalid)?, retry))) })
                     .name("pin-product-policy")
                     .await?
                     .into_inner();
-                let (resolved, bindings) = self
+                let (mut resolved, mut bindings) = self
                     .resolve(&ctx, &command.institution, subject_ref, evidence)
                     .await?
                     .map_err(evidence_error)?;
+                bindings.for_policy(&policy);
+                use_authorized_address(&mut resolved, &bindings, &policy);
                 let needs_candidates = policy
                     .checks
                     .iter()
@@ -112,7 +128,7 @@ impl ProductCase {
                     Action::Evidence(Evidence { evidence }) => evidence,
                     _ => &empty,
                 };
-                let (resolved, bindings) = self
+                let (mut resolved, mut bindings) = self
                     .resolve(
                         &ctx,
                         &stored.case.tenant_id,
@@ -121,6 +137,8 @@ impl ProductCase {
                     )
                     .await?
                     .map_err(evidence_error)?;
+                bindings.for_policy(&stored.case.policy);
+                use_authorized_address(&mut resolved, &bindings, &stored.case.policy);
                 let revision = stored.case.revision;
                 let now = self.revalidate(&ctx, &mut stored.case, bindings).await?;
                 // Resolving the current identity may invalidate prior findings even when
@@ -132,6 +150,22 @@ impl ProductCase {
                         .into_values()
                         .try_for_each(|item| stored.case.provide(item, now)),
                     Action::Retry(Retry { check }) => stored.case.retry(*check, now),
+                    Action::Review(review)
+                        if review.check == ekyc_domain::CheckKind::Sanctions
+                            && stored
+                                .case
+                                .screen_obligations
+                                .contains_key(&review.operation_id) =>
+                    {
+                        stored.case.review_original(
+                            &review.operation_id,
+                            review.disposition,
+                            &command.caller,
+                            &review.reason,
+                            &review.review_ref,
+                            now,
+                        )
+                    }
                     Action::Review(Review {
                         check,
                         disposition,
@@ -174,5 +208,26 @@ impl ProductCase {
         self.publish(&ctx, &mut stored, now).await?;
         ctx.set(&command.receipt_key(), Json(command));
         Ok(Json(stored.case.view()))
+    }
+}
+
+fn use_authorized_address(
+    resolved: &mut super::EvidenceMap,
+    bindings: &ekyc_domain::product::BindingSnapshot,
+    policy: &ekyc_domain::product::Policy,
+) {
+    let kind = ekyc_domain::CheckKind::Address;
+    if let (Some(asset), Some(routing), Some(candidates)) = (
+        resolved.get_mut(&kind),
+        policy
+            .checks
+            .iter()
+            .find(|r| r.kind == kind)
+            .and_then(|r| r.routing.as_ref()),
+        bindings.provider_candidates.get(&kind),
+    ) {
+        if let Some(approved) = candidates.iter().find(|b| routing.approves(b)) {
+            *asset = approved.clone();
+        }
     }
 }

@@ -1,9 +1,12 @@
 //! Each product case owns its commands, provider attempts and pinned decision policy.
 mod commands;
 mod dispatch;
+mod routing;
 use commands::Command;
 mod policies;
+mod screening;
 mod settlement;
+pub(crate) use screening::ScreenLookupResult;
 #[cfg(test)]
 mod tests;
 use crate::evidence::{EvidenceError, EvidenceResolver, EvidenceSnapshot};
@@ -19,6 +22,7 @@ use serde_json::Value;
 use std::{collections::BTreeMap, time::Duration};
 
 const STATE: &str = "product_case";
+type EvidenceMap = BTreeMap<CheckKind, BoundEvidence>;
 type Evidence = BTreeMap<CheckKind, String>;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -39,10 +43,27 @@ struct Flight {
     expiry_invocation: Option<String>,
 }
 
+impl Flight {
+    fn delivered_by(&mut self, operation: &str, caller: &str) {
+        if self.operation_id == operation && self.callback_invocation.as_deref() == Some(caller) {
+            self.callback_invocation = None;
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Operation {
     pub kind: CheckKind,
     pub id: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct RouteResult {
+    pub operation: Operation,
+    pub observation: Option<Observation>,
+    pub observed_at: DateTime<Utc>,
+    pub received_at: DateTime<Utc>,
+    pub status: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -52,6 +73,8 @@ pub(crate) struct ProductResult {
     pub observed_at: DateTime<Utc>,
     #[serde(default)]
     pub received_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callback_invocation: Option<String>,
 }
 
 impl ProductResult {
@@ -93,6 +116,7 @@ fn already_received(seen_positive: Option<bool>, positive: bool) -> bool {
 }
 
 pub(crate) struct ProductCase {
+    pub rules: crate::rules::Rules,
     pub store: Store,
     pub resolver: EvidenceResolver,
     pub retry: RetrySettings,
@@ -115,8 +139,9 @@ impl ProductCase {
     #[handler]
     async fn readiness_v2(&self, ctx: SharedObjectContext<'_>) -> HandlerResult<Json<String>> {
         let issuer = self.resolver.clone();
+        let rules = self.rules.clone();
         let ready = ctx
-            .run(move || async move { Ok(issuer.ready().await) })
+            .run(move || async move { Ok(issuer.ready().await && rules.effective(None).await) })
             .await?;
         if !ready {
             return Err(TerminalError::new_with_code(503, "evidence_registry_unavailable").into());
@@ -141,6 +166,20 @@ impl ProductCase {
         .name("repair-product-projection")
         .await?;
         Ok(())
+    }
+
+    #[handler(ingress_private)]
+    async fn reroute(&self, ctx: ObjectContext<'_>, op: Json<Operation>) -> HandlerResult<bool> {
+        self.move_unsent_or_ambiguous(&ctx, op.into_inner()).await
+    }
+
+    #[handler(ingress_private)]
+    async fn route_result(
+        &self,
+        ctx: ObjectContext<'_>,
+        result: Json<RouteResult>,
+    ) -> HandlerResult<()> {
+        self.apply_address_result(&ctx, result.into_inner()).await
     }
 
     #[handler(ingress_private)]
@@ -176,6 +215,42 @@ impl ProductCase {
     }
 
     #[handler(ingress_private)]
+    async fn screen_lookup(
+        &self,
+        ctx: ObjectContext<'_>,
+        input: Json<ScreenLookupResult>,
+    ) -> HandlerResult<()> {
+        if let Some(Json(mut stored)) = ctx.get::<Json<Stored>>(STATE).await? {
+            self.settle_original(&ctx, &mut stored, input.into_inner())
+                .await?;
+        }
+        Ok(())
+    }
+
+    #[handler(ingress_private)]
+    async fn assign_screen(
+        &self,
+        ctx: ObjectContext<'_>,
+        operation: Json<String>,
+    ) -> HandlerResult<()> {
+        if let Some(Json(mut stored)) = ctx.get::<Json<Stored>>(STATE).await? {
+            let now = clock(&ctx).await?;
+            let operation = operation.into_inner();
+            if let Some(hold) = stored.case.screen_obligations.get(&operation) {
+                let delay = hold.assign_at.signed_duration_since(now);
+                if hold.assign_at > now {
+                    ctx.object_client::<ProductCaseClient>(ctx.key())
+                        .assign_screen(Json(operation))
+                        .send_after(Duration::from_millis(delay.num_milliseconds() as u64 + 1));
+                } else if stored.case.assign_original(&operation, now) {
+                    self.publish(&ctx, &mut stored, now).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[handler(ingress_private)]
     async fn expire(&self, ctx: ObjectContext<'_>, op: Json<Operation>) -> HandlerResult<()> {
         let op = op.into_inner();
         let Some(Json(stored)) = ctx.get::<Json<Stored>>(STATE).await? else {
@@ -199,6 +274,7 @@ impl ProductCase {
                 observation: Observation::Unavailable,
                 observed_at: now,
                 received_at: None,
+                callback_invocation: None,
             },
         )
         .await
@@ -223,8 +299,16 @@ impl ProductCase {
         &self,
         ctx: &ObjectContext<'_>,
         case: &mut Case,
-        bindings: BindingSnapshot,
+        mut bindings: BindingSnapshot,
     ) -> HandlerResult<DateTime<Utc>> {
+        bindings.for_policy(&case.policy);
+        // Empty issuer reads revalidate identity; address proof alternatives remain pinned to their revision.
+        if let Some(pinned) = case.bindings.provider_candidates.get(&CheckKind::Address) {
+            bindings
+                .provider_candidates
+                .entry(CheckKind::Address)
+                .or_insert_with(|| pinned.clone());
+        }
         let now = clock(ctx).await?;
         case.refresh_bindings(bindings, now).map_err(invalid)?;
         if case.has_reused_checks() {
@@ -263,12 +347,22 @@ fn validated(
     mut snap: EvidenceSnapshot,
     catalog: &crate::providers::Catalog,
 ) -> Result<(BTreeMap<CheckKind, BoundEvidence>, BindingSnapshot), EvidenceError> {
+    for items in snap.provider_candidates.values_mut() {
+        items.retain_mut(|asset| catalog.bind(asset).is_ok());
+    }
     for asset in snap.evidence.values_mut().chain(snap.screening.iter_mut()) {
-        catalog.bind(asset)?;
+        if catalog.bind(asset).is_err() {
+            let replacement = snap
+                .provider_candidates
+                .get(&asset.kind)
+                .and_then(|items| items.first());
+            *asset = replacement.ok_or(EvidenceError::Invalid)?.clone();
+        }
     }
     Ok((
         snap.evidence,
         BindingSnapshot {
+            provider_candidates: snap.provider_candidates,
             current_document_revision: snap.current_document_revision,
             current_portrait_revision: snap.current_portrait_revision,
             screening: snap.screening,

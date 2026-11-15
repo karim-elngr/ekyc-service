@@ -1,8 +1,11 @@
+mod attempts;
 mod checks;
+mod checks_v2;
 mod evidence;
 mod interactive;
 mod product;
 mod providers;
+mod rules;
 mod settings;
 
 use crate::checks::ProviderChecks;
@@ -66,7 +69,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .into_iter()
         .map(|k| provider_limits(k, timeout_ms).map(|limits| (k, limits)))
         .collect::<Result<BTreeMap<_, _>, _>>()?;
+    let rules = rules::Rules::from_env()?;
+    for (kind, provider) in providers.keys() {
+        if rules.pool(*kind, provider).is_none() {
+            return Err(format!("missing contract for {}", provider).into());
+        }
+    }
+    store.install_contracts(&rules.book).await?;
+    let interactive = InteractiveMocks {
+        transport,
+        registrations,
+    };
+    let attempts = attempts::ProviderAttemptV2 {
+        before_send_barrier: env::var_os("EKYC_DRILL_BEFORE_SEND_FILE").map(Into::into),
+        store: store.clone(),
+        providers: providers.clone(),
+        interactive: interactive.clone(),
+        rules: rules.clone(),
+    };
     let products = product::ProductCase {
+        rules: rules.clone(),
         store: store.clone(),
         resolver: evidence::EvidenceResolver::from_env()?,
         retry: RetrySettings::from_env()?,
@@ -76,13 +98,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let checks = ProviderChecks {
         store,
         providers,
-        interactive: InteractiveMocks {
-            transport,
-            registrations,
-        },
+        interactive,
+        rules,
         limits,
     };
-    let endpoint = Endpoint::builder().bind(checks).bind(products).build();
+    let endpoint = Endpoint::builder()
+        .bind(checks)
+        .bind(products)
+        .bind(attempts)
+        .build();
     tracing::info!(%bind, "serving eKYC Restate endpoint");
     HttpServer::new(endpoint).listen_and_serve(bind).await;
     Ok(())

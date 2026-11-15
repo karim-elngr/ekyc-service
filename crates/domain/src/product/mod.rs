@@ -4,6 +4,9 @@ mod check;
 mod commands;
 mod evidence;
 mod policy;
+mod routing;
+mod screen;
+pub use routing::{AddressRouting, ApprovedRoute, PlacementMode, RouteAvailability, RoutedAnswer};
 mod view;
 pub mod wire;
 
@@ -11,6 +14,7 @@ pub use case::ProductCase;
 pub use check::{CaseState, CheckStatus, Origin, ProductCheck, ReviewAction, ReviewRecord};
 pub use evidence::{BindingSnapshot, BoundEvidence, Fact};
 pub use policy::{valid_slug, Policy, Reuse, Rule};
+pub use screen::{ScreenObligation, ScreenOutcome};
 pub use view::{PublicCase, PublicCheck, PublicReason};
 struct Assessment {
     status: CheckStatus,

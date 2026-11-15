@@ -1,0 +1,37 @@
+{
+  "product": "wallet",
+  "use_case": "address-replacement",
+  "version": "wallet.address-replacement.v1",
+  "checks": [
+    {
+      "kind": "address",
+      "methods": [
+        "address_verification_a",
+        "address_verification_b"
+      ],
+      "min_confidence": 80,
+      "max_proof_age_days": 90,
+      "routing": {
+        "mode": "weighted",
+        "salt": "address-pilot-v1",
+        "replace_ambiguous": true,
+        "roster": [
+          {
+            "provider": "address-a",
+            "method": "address_verification_a",
+            "weight": 80,
+            "min_confidence": 80,
+            "max_proof_age_days": 90
+          },
+          {
+            "provider": "address-b",
+            "method": "address_verification_b",
+            "weight": 20,
+            "min_confidence": 80,
+            "max_proof_age_days": 90
+          }
+        ]
+      }
+    }
+  ]
+}

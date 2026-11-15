@@ -78,6 +78,7 @@ export const scenarioGroups = {
     },
   ],
   "Provider behavior": [
+    {id:"routing",name:"Two address vendors",useCase:"address-pilot",description:"Issue proof for two authorized vendors, then inspect the selected route in the staff workspace.",fixtures:{}},
     {
       id: "interactive",
       name: "Live provider responses",
@@ -164,6 +165,7 @@ export async function openCase(
           : kind === "document"
             ? { screening_scenario: fixtures.sanctions || "pass" }
             : {};
+      if (kind==="address" && useCase.startsWith("address-")) extra.providers=["address-a","address-b"];
       evidence[kind] = await issue(
         run.subject,
         kind,
@@ -186,6 +188,7 @@ export async function provide(view, fixtures, key, send = post) {
       kind === "face" && evidence.document
         ? { document_ref: evidence.document }
         : {};
+    if(kind==="address" && view.use_case?.startsWith("address-")) extra.providers=["address-a","address-b"];
     evidence[kind] = await issue(
       view.subject_ref,
       kind,

@@ -34,7 +34,15 @@ impl Stored {
             })
     }
 
+    #[cfg(test)]
     pub(super) fn schedule(&mut self, now: DateTime<Utc>) -> Vec<CheckJob> {
+        self.schedule_with_deadlines(now, &BTreeMap::new())
+    }
+    fn schedule_with_deadlines(
+        &mut self,
+        now: DateTime<Utc>,
+        pinned: &BTreeMap<CheckKind, i64>,
+    ) -> Vec<CheckJob> {
         let mut flights = BTreeMap::new();
         let mut jobs = Vec::new();
         if !self.case.is_terminal() {
@@ -58,7 +66,10 @@ impl Stored {
                         } else {
                             self.retry.case_deadline_ms as i64
                         };
-                        let deadline_ms = now.timestamp_millis() + budget;
+                        let deadline_ms = pinned
+                            .get(&kind)
+                            .copied()
+                            .unwrap_or(now.timestamp_millis() + budget);
                         jobs.push(CheckJob {
                             operation_id: op.clone(),
                             callback: check.is_interactive(),
@@ -92,6 +103,48 @@ impl ProductCase {
         stored: &mut Stored,
         now: DateTime<Utc>,
     ) -> HandlerResult<()> {
+        let mut deadlines = BTreeMap::new();
+        for kind in [CheckKind::Address, CheckKind::Sanctions] {
+            let routed = match kind {
+                CheckKind::Address => stored.case.routed_address(),
+                CheckKind::Sanctions => stored.case.strict_screening(),
+                _ => false,
+            };
+            if !routed
+                || !stored
+                    .case
+                    .checks
+                    .get(&kind)
+                    .is_some_and(|check| check.status == CheckStatus::Pending)
+            {
+                continue;
+            }
+            let case = stored.case.clone();
+            let store = self.store.clone();
+            let deadline = now.timestamp_millis() + stored.retry.case_deadline_ms as i64;
+            let route = ctx
+                .run(move || async move {
+                    Ok(Json(
+                        store.assign_route(&case, kind, deadline, false).await?,
+                    ))
+                })
+                .name("pin-provider-assignment")
+                .await?
+                .into_inner();
+            if let Some((asset, deadline)) = route {
+                stored
+                    .case
+                    .checks
+                    .get_mut(&kind)
+                    .expect("pending routed check")
+                    .evidence = Some(asset);
+                deadlines.insert(kind, deadline);
+            } else {
+                stored
+                    .case
+                    .block_route(kind, "NO_AUTHORIZED_PROVIDER_ROUTE", now);
+            }
+        }
         let store = self.store.clone();
         let proposal = stored.case.clone();
         stored.case = ctx
@@ -100,6 +153,22 @@ impl ProductCase {
             .await?
             .into_inner();
         let previous = ctx.get::<Json<Stored>>(STATE).await?;
+        for (operation, hold) in &stored.case.screen_obligations {
+            if hold.outcome.is_none()
+                && previous
+                    .as_ref()
+                    .is_none_or(|p| !p.0.case.screen_obligations.contains_key(operation))
+            {
+                let delay = hold
+                    .assign_at
+                    .signed_duration_since(now)
+                    .num_milliseconds()
+                    .max(0) as u64;
+                ctx.object_client::<ProductCaseClient>(ctx.key())
+                    .assign_screen(Json(operation.clone()))
+                    .send_after(Duration::from_millis(delay + 1));
+            }
+        }
         let orphaned_match = previous
             .as_ref()
             .and_then(|old| superseded_screen(&old.0.case, &stored.case));
@@ -122,7 +191,7 @@ impl ProductCase {
             .filter(|id| id.as_str() != ctx.invocation_id())
             .cloned()
             .collect();
-        let jobs = stored.schedule(now);
+        let jobs = stored.schedule_with_deadlines(now, &deadlines);
         for id in retired {
             ctx.invocation_handle(id).cancel();
         }
@@ -149,7 +218,7 @@ impl ProductCase {
                 let kind = job.kind;
                 let provider = ctx
                     .service_client::<ProviderChecksClient>()
-                    .product(Json(job))
+                    .product_v2(Json(job))
                     .send();
                 let expiry = ctx
                     .object_client::<ProductCaseClient>(ctx.key())

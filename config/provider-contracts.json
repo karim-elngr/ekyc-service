@@ -1,0 +1,265 @@
+{
+  "pools": {
+    "demo-face": {
+      "total": 4,
+      "submit": 3,
+      "lookup": 1
+    },
+    "demo-document": {
+      "total": 4,
+      "submit": 3,
+      "lookup": 1
+    },
+    "demo-address": {
+      "total": 4,
+      "submit": 3,
+      "lookup": 1
+    },
+    "demo-sanctions": {
+      "total": 4,
+      "submit": 3,
+      "lookup": 1
+    },
+    "demo-address-a": {
+      "total": 4,
+      "submit": 3,
+      "lookup": 1
+    },
+    "demo-address-b": {
+      "total": 4,
+      "submit": 3,
+      "lookup": 1
+    },
+    "demo-sanctions-a": {
+      "total": 4,
+      "submit": 3,
+      "lookup": 1
+    },
+    "demo-sanctions-b": {
+      "total": 4,
+      "submit": 3,
+      "lookup": 1
+    }
+  },
+  "rates": {
+    "demo-face": {
+      "per_minute": 600,
+      "lookup_reserve": 6
+    },
+    "demo-document": {
+      "per_minute": 600,
+      "lookup_reserve": 6
+    },
+    "demo-address": {
+      "per_minute": 600,
+      "lookup_reserve": 6
+    },
+    "demo-sanctions": {
+      "per_minute": 600,
+      "lookup_reserve": 6
+    },
+    "demo-address-a": {
+      "per_minute": 600,
+      "lookup_reserve": 6
+    },
+    "demo-address-b": {
+      "per_minute": 600,
+      "lookup_reserve": 6
+    },
+    "demo-sanctions-a": {
+      "per_minute": 600,
+      "lookup_reserve": 6
+    },
+    "demo-sanctions-b": {
+      "per_minute": 600,
+      "lookup_reserve": 6
+    }
+  },
+  "billing": {
+    "demo-face": {
+      "currency": "USD",
+      "timezone": "UTC",
+      "monthly_ceiling": 100000,
+      "lookup_reserve": 100
+    },
+    "demo-document": {
+      "currency": "USD",
+      "timezone": "UTC",
+      "monthly_ceiling": 100000,
+      "lookup_reserve": 100
+    },
+    "demo-address": {
+      "currency": "USD",
+      "timezone": "UTC",
+      "monthly_ceiling": 100000,
+      "lookup_reserve": 100
+    },
+    "demo-sanctions": {
+      "currency": "USD",
+      "timezone": "UTC",
+      "monthly_ceiling": 100000,
+      "lookup_reserve": 100
+    },
+    "demo-address-a": {
+      "currency": "USD",
+      "timezone": "UTC",
+      "monthly_ceiling": 100000,
+      "lookup_reserve": 100
+    },
+    "demo-address-b": {
+      "currency": "USD",
+      "timezone": "UTC",
+      "monthly_ceiling": 100000,
+      "lookup_reserve": 100
+    },
+    "demo-sanctions-a": {
+      "currency": "USD",
+      "timezone": "UTC",
+      "monthly_ceiling": 100000,
+      "lookup_reserve": 100
+    },
+    "demo-sanctions-b": {
+      "currency": "USD",
+      "timezone": "UTC",
+      "monthly_ceiling": 100000,
+      "lookup_reserve": 100
+    }
+  },
+  "routes": [
+    {
+      "kind": "face",
+      "provider": "face",
+      "pool": "demo-face",
+      "rate_bucket": "demo-face",
+      "breaker_key": "face-submit",
+      "billing_account": "demo-face",
+      "tariff_revision": "demo-v1",
+      "submit_cost": 1,
+      "lookup_cost": 0,
+      "billing_unit": "operation",
+      "failure_threshold": 3,
+      "cooldown_ms": 5000,
+      "probe_ms": 15000
+    },
+    {
+      "kind": "document",
+      "provider": "document",
+      "pool": "demo-document",
+      "rate_bucket": "demo-document",
+      "breaker_key": "document-submit",
+      "billing_account": "demo-document",
+      "tariff_revision": "demo-v1",
+      "submit_cost": 1,
+      "lookup_cost": 0,
+      "billing_unit": "operation",
+      "failure_threshold": 3,
+      "cooldown_ms": 5000,
+      "probe_ms": 15000
+    },
+    {
+      "kind": "address",
+      "provider": "address",
+      "pool": "demo-address",
+      "rate_bucket": "demo-address",
+      "breaker_key": "address-submit",
+      "billing_account": "demo-address",
+      "tariff_revision": "demo-v1",
+      "submit_cost": 1,
+      "lookup_cost": 0,
+      "billing_unit": "operation",
+      "failure_threshold": 3,
+      "cooldown_ms": 5000,
+      "probe_ms": 15000
+    },
+    {
+      "kind": "sanctions",
+      "provider": "sanctions",
+      "pool": "demo-sanctions",
+      "rate_bucket": "demo-sanctions",
+      "breaker_key": "sanctions-submit",
+      "billing_account": "demo-sanctions",
+      "tariff_revision": "demo-v1",
+      "submit_cost": 1,
+      "lookup_cost": 0,
+      "billing_unit": "operation",
+      "failure_threshold": 3,
+      "cooldown_ms": 5000,
+      "probe_ms": 15000
+    },
+    {
+      "kind": "face",
+      "provider": "face-after",
+      "pool": "demo-face",
+      "rate_bucket": "demo-face",
+      "breaker_key": "face-after-submit",
+      "billing_account": "demo-face",
+      "tariff_revision": "demo-v1",
+      "submit_cost": 1,
+      "lookup_cost": 0,
+      "billing_unit": "operation",
+      "failure_threshold": 3,
+      "cooldown_ms": 5000,
+      "probe_ms": 15000
+    },
+    {
+      "kind": "address",
+      "provider": "address-a",
+      "pool": "demo-address-a",
+      "rate_bucket": "demo-address-a",
+      "breaker_key": "address-a-submit",
+      "billing_account": "demo-address-a",
+      "tariff_revision": "demo-v1",
+      "submit_cost": 1,
+      "lookup_cost": 0,
+      "billing_unit": "operation",
+      "failure_threshold": 3,
+      "cooldown_ms": 5000,
+      "probe_ms": 15000
+    },
+    {
+      "kind": "address",
+      "provider": "address-b",
+      "pool": "demo-address-b",
+      "rate_bucket": "demo-address-b",
+      "breaker_key": "address-b-submit",
+      "billing_account": "demo-address-b",
+      "tariff_revision": "demo-v1",
+      "submit_cost": 1,
+      "lookup_cost": 0,
+      "billing_unit": "operation",
+      "failure_threshold": 3,
+      "cooldown_ms": 5000,
+      "probe_ms": 15000
+    },
+    {
+      "kind": "sanctions",
+      "provider": "sanctions-a",
+      "pool": "demo-sanctions-a",
+      "rate_bucket": "demo-sanctions-a",
+      "breaker_key": "sanctions-a-submit",
+      "billing_account": "demo-sanctions-a",
+      "tariff_revision": "demo-v1",
+      "submit_cost": 1,
+      "lookup_cost": 0,
+      "billing_unit": "operation",
+      "failure_threshold": 3,
+      "cooldown_ms": 5000,
+      "probe_ms": 15000
+    },
+    {
+      "kind": "sanctions",
+      "provider": "sanctions-b",
+      "pool": "demo-sanctions-b",
+      "rate_bucket": "demo-sanctions-b",
+      "breaker_key": "sanctions-b-submit",
+      "billing_account": "demo-sanctions-b",
+      "tariff_revision": "demo-v1",
+      "submit_cost": 1,
+      "lookup_cost": 0,
+      "billing_unit": "operation",
+      "failure_threshold": 3,
+      "cooldown_ms": 5000,
+      "probe_ms": 15000
+    }
+  ]
+}

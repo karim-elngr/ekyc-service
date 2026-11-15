@@ -2,20 +2,22 @@ use async_trait::async_trait;
 use chrono::NaiveDate;
 use ekyc_domain::{CheckKind, Observation};
 use ekyc_http_transport::{decode_json, Transport};
-use ekyc_ports::{Evaluated, Provider, ProviderError};
+use ekyc_ports::{Evaluated, Provider, ProviderError, ScreeningLookup};
 use serde::{Deserialize, Serialize};
 
 pub struct AddressProvider {
     transport: Transport,
     endpoint: String,
+    lookup_endpoint: String,
 }
 
 impl AddressProvider {
     pub fn new(transport: Transport, base_url: String) -> Self {
-        let endpoint = format!("{}/addresses/verify", base_url.trim_end_matches('/'));
+        let base = base_url.trim_end_matches('/');
         Self {
             transport,
-            endpoint,
+            endpoint: format!("{base}/addresses/verify"),
+            lookup_endpoint: format!("{base}/addresses/result"),
         }
     }
 }
@@ -62,11 +64,43 @@ impl Provider for AddressProvider {
     }
 
     fn decode(&self, body: &[u8]) -> Result<Evaluated<Observation>, ProviderError> {
-        let reply: Evaluated<Response> = decode_json(body)?;
-        Ok(reply.map(|response| Observation::Address {
-            passed: matches!(response.status, Status::Pass),
-            confidence: response.confidence,
-            proof_date: response.proof_date,
-        }))
+        Ok(address_finding(decode_json(body)?))
     }
+
+    async fn screening_result(&self, operation_id: &str) -> Result<ScreeningLookup, ProviderError> {
+        #[derive(Serialize)]
+        struct Request<'a> {
+            operation_id: &'a str,
+        }
+        #[derive(Deserialize)]
+        #[serde(tag = "status", rename_all = "snake_case")]
+        enum Lookup {
+            Pending,
+            NotAccepted,
+            Inconclusive,
+            Complete { result: Evaluated<Response> },
+        }
+        let body = self
+            .transport
+            .post_bytes(
+                &self.lookup_endpoint,
+                operation_id,
+                &Request { operation_id },
+            )
+            .await?;
+        Ok(match decode_json(&body)? {
+            Lookup::Pending => ScreeningLookup::Pending,
+            Lookup::NotAccepted => ScreeningLookup::NotAccepted,
+            Lookup::Inconclusive => ScreeningLookup::Inconclusive,
+            Lookup::Complete { result } => ScreeningLookup::Complete(address_finding(result)),
+        })
+    }
+}
+
+fn address_finding(reply: Evaluated<Response>) -> Evaluated<Observation> {
+    reply.map(|response| Observation::Address {
+        passed: matches!(response.status, Status::Pass),
+        confidence: response.confidence,
+        proof_date: response.proof_date,
+    })
 }

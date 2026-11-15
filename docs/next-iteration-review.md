@@ -154,3 +154,14 @@ The revised 18-slide talk opens when a vendor has processed a request and its wo
 The two live inspections use the same wallet and loan cases. The audience can open the actual pending callback in Restate, send the provider response and see the invocation complete. The offline gallery identifies its three images as captures from one run. The desktop and mobile rehearsals cover both talk routes. [Browser rehearsal](../scripts/deck_smoke.py)
 
 The architecture slide and the portal both open the local Liam viewer. Searching for `decision_outbox` shows the two-column foreign key that ties a published event to a specific case revision. Release checks compare the diagram source with the migrated database and open that relationship in a browser. [Schema source](../apps/portal/schema/structure.sql) · [Viewer check](../scripts/schema_smoke.py)
+
+## Provider routing iteration
+
+| Review | Result and next iteration |
+| --- | --- |
+| Product | The wallet pilot supports weighted and primary/backup routing. The strict lending policy holds approval while an accepted original screening remains unresolved. Before introducing real vendors, the institution must approve eligibility, prices, fallback rights and the disposition of conflicting findings. |
+| QA | Independent A/B request ledgers distinguish physical submissions and lookups from local authorizations. The synthetic drills cover a ten-case stratified 8:2 split, 503 diversion, spend exhaustion, a missing backup binding, slow recovery and ambiguous results. An actual vendor integration still needs acceptance tests for its idempotency and result-lookup contract. |
+| UI/UX | The deck links directly to a preselected, runnable two-vendor case. Staff can search by exact case ID, see the original owner and linked replacement, and change traffic with a reason and expiry. The next usability test should ask an on-call engineer to locate the oldest unresolved operation and explain whether a retry is safe. |
+| Architecture | Restate scopes simultaneous requests. PostgreSQL checks the rolling allowance, breaker generation and billable unit under lock. Release tests include the admission race with a concurrently published case revision and the race between recovery probes. Production capacity sizing requires the vendor's account mapping and measured arrival rates. |
+| Code and organization | The new scoped attempt service has its own Restate identity. Previous handlers remain available for earlier invocations. Retire those paths only after confirming their registered deployments have drained. |
+| Documentation | Both reliability excerpts are generated from their cited source files. The schema explorer is regenerated from migrated PostgreSQL. The routing guide documents the shadow comparison, stage thresholds, rollback and local-only fixture values. |

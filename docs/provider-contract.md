@@ -1,6 +1,6 @@
 # Connect a verification provider
 
-The evidence issuer selects a vendor by its stable `provider` identity for each document, face, address or sanctions item. Set `EKYC_PROVIDER_CATALOG` on the worker to a JSON object keyed by check kind, then by vendor identity. Each URL is the base for that adapter's wire protocol.
+The evidence issuer supplies authorized bindings by stable `provider` identity for each document, face, address or sanctions item. Set `EKYC_PROVIDER_CATALOG` on the worker to a JSON object keyed by check kind, then by vendor identity. Each URL is the base for that adapter's wire protocol.
 
 ```json
 {
@@ -12,6 +12,10 @@ The evidence issuer selects a vendor by its stable `provider` identity for each 
 ```
 
 During a switch, register both vendor identities and have the issuer assign the new identity to new evidence. Keep the old route available until active checks and outstanding screening lookups for that vendor finish. Never reassign an existing identity to a different vendor. Reviewer handoffs retain the original provider and method. If the catalog is absent, the four existing `DOCUMENT_URL`, `FACE_URL`, `ADDRESS_URL` and `SANCTIONS_URL` settings register the legacy identities `document`, `face`, `address` and `sanctions`.
+
+Set `EKYC_PROVIDER_CONTRACTS_FILE` to the contract registry used by the worker and registrar. The `pool` limits simultaneous calls in Restate. The `rate_bucket` identifies the upstream start quota, `breaker_key` identifies the affected submission endpoint, and `billing_account` groups spend in currency minor units by billing month. A provider alias sharing an upstream credential may need the same pool and rate bucket as another route. Derive these mappings, prices and limits from the vendor agreement. The checked-in values are synthetic. [Registry](../config/provider-contracts.json)
+
+A v3 issuer response supplies a separate authorized locator for each candidate on the same immutable revision. The wallet address pilot accepts `address-a` and `address-b` under their approved methods. `POST /addresses/result` looks up the original operation. A definitive non-acceptance must fence delayed submissions for that ID. A pending or inconclusive lookup keeps its own audit history. [Issuer contract](../apps/portal/public/issuer-contract.json)
 
 Every vendor must honor the operation ID in the `Idempotency-Key` header across retries and restarts. Successful responses include an RFC 3339 `evaluated_at` fixed when the vendor evaluated that operation. Return the original value on cached delivery. The worker records receipt separately, uses receipt time for the operation deadline, and uses vendor evaluation time for ordering and reuse. A malformed or missing timestamp cannot authorize a check. A future timestamp blocks the check. Legacy passes with only local receipt time do not establish reusable identity evidence. Unchanged historical decisions remain readable.
 

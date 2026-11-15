@@ -1,0 +1,11 @@
+{
+  "product": "lending", "use_case": "strict_screening", "version": "lending.strict_screening.v1",
+  "strict_screen": {
+    "primary": "sanctions-a", "replacement": "sanctions-b",
+    "owner": "screening-operations", "assign_after_ms": 3000
+  },
+  "checks": [
+    {"kind": "document", "methods": ["document_verification"], "min_confidence": 85},
+    {"kind": "sanctions", "methods": ["sanctions_screening"]}
+  ]
+}

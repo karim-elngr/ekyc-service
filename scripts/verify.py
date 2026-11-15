@@ -27,6 +27,10 @@ HOST_PORTS = (
     "FACE",
     "ADDRESS",
     "SANCTIONS",
+    "ADDRESS_A",
+    "ADDRESS_B",
+    "SANCTIONS_A",
+    "SANCTIONS_B",
 )
 IMAGES = {"SERVICE": ROOT, "MOCK": ROOT / "mocks", "PORTAL": ROOT / "apps/portal"}
 
@@ -69,7 +73,7 @@ def main():
     ports = available_ports()
     for name, port in ports.items():
         env["EKYC_" + name + "_PORT"] = str(port)
-        if name in ("DOCUMENT", "FACE", "ADDRESS", "SANCTIONS"):
+        if name in ("DOCUMENT", "FACE", "ADDRESS", "SANCTIONS", "ADDRESS_A", "ADDRESS_B", "SANCTIONS_A", "SANCTIONS_B"):
             env[name + "_URL"] = f"http://127.0.0.1:{port}"
         else:
             env[f"EKYC_{name}_URL"] = f"http://127.0.0.1:{port}"
@@ -122,22 +126,19 @@ def main():
         script("export_schema", "--engine", engine, "--project", project, "--check")
         run("cargo", "test", "--locked", "--workspace", "--all-features")
         run(engine, "run", "--rm", env["EKYC_PORTAL_IMAGE"], "pnpm", "test")
+        isolated = ("--engine", engine, "--project", project, "--override", str(OVERRIDE))
+        script("first_case")
+        script("address_routing_smoke", *isolated)
+        script("address_recovery_smoke")
+        script("reconciliation_smoke")
+        script("strict_screening_smoke")
+        script("provider_capacity_smoke", *isolated)
         for name in (
-            "first_case",
-            "product_smoke",
-            "queries_smoke",
-            "interactive_smoke",
-            "binding_drift_smoke",
-            "contract_smoke",
-            "late_screen_smoke",
-            "reconciliation_smoke",
-            "provider_ordering_smoke",
-            "browser_smoke",
-            "deck_smoke",
-            "schema_smoke",
+            "product_smoke", "queries_smoke", "interactive_smoke", "binding_drift_smoke",
+            "contract_smoke", "late_screen_smoke", "provider_ordering_smoke",
+            "browser_smoke", "deck_smoke", "schema_smoke",
         ):
             script(name)
-        isolated = ("--engine", engine, "--project", project, "--override", str(OVERRIDE))
         script("service_contract_drills", *isolated)
         script("legacy_delivery_smoke", *isolated)
         script("sanctions_restart_smoke", *isolated)

@@ -40,6 +40,12 @@ impl ProductCase {
         if self.is_terminal() {
             return Err("case is terminal".into());
         }
+        if kind == CheckKind::Address && self.routed_address() {
+            return Err("address pilot retains the original operation, submission deadline and attempt budget".into());
+        }
+        if kind == CheckKind::Sanctions && self.strict_screening() {
+            return Err("strict screening uses its pinned original and recovery lane".into());
+        }
         let check = self
             .checks
             .get_mut(&kind)
@@ -155,7 +161,7 @@ impl ProductCase {
                 reasons: vec!["OBSERVATION_TIME_INVALID".into()],
             }
         } else {
-            rule.assess(&observation, now)
+            rule.assess(&evidence, &observation, now)
         };
         check.fact = Some(Fact {
             source_passed: assessment.status == CheckStatus::Passed,
@@ -172,6 +178,31 @@ impl ProductCase {
         check.reasons = binding_error
             .map(|code| vec![code.into()])
             .unwrap_or(assessment.reasons);
+        if kind == CheckKind::Sanctions && binding_error.is_none() {
+            if let Some(hold) = self.screen_obligations.get_mut(operation_id) {
+                match check.fact.as_ref().map(|fact| &fact.observation) {
+                    Some(Observation::Sanctions { hit })
+                        if observed_at <= received_at.unwrap_or(now) || *hit =>
+                    {
+                        hold.outcome = Some(if *hit {
+                            super::ScreenOutcome::Hit
+                        } else {
+                            super::ScreenOutcome::Clear
+                        });
+                        hold.observed_at = Some(observed_at);
+                        hold.received_at = received_at;
+                        if *hit {
+                            hold.assigned_to =
+                                Some(self.policy.strict_screen.as_ref().unwrap().owner.clone());
+                        }
+                    }
+                    Some(Observation::Unavailable) => {
+                        self.replace_screen(operation_id);
+                    }
+                    _ => {}
+                }
+            }
+        }
         self.advance(now);
         self.revision += 1;
         Ok(())
@@ -198,14 +229,20 @@ impl ProductCase {
             .checks
             .get_mut(&kind)
             .ok_or("check outside product scope")?;
-        if kind != CheckKind::Sanctions
-            || check.status != CheckStatus::Review
-            || !check
+        let address_conflict = kind == CheckKind::Address
+            && check
+                .reasons
+                .iter()
+                .any(|r| r == "CONFLICTING_ADDRESS_FINDINGS");
+        let screening_hit = kind == CheckKind::Sanctions
+            && check
                 .fact
                 .as_ref()
-                .is_some_and(|f| matches!(f.observation, Observation::Sanctions { hit: true }))
+                .is_some_and(|f| matches!(f.observation, Observation::Sanctions { hit: true }));
+        if check.status != CheckStatus::Review
+            || !(screening_hit || (address_conflict && action == ReviewAction::Confirm))
         {
-            return Err("no potential sanctions match to resolve".into());
+            return Err("review disposition is not authorized for this finding".into());
         }
         let record = ReviewRecord {
             kind,
@@ -222,6 +259,10 @@ impl ProductCase {
         check.review = Some(record.clone());
         self.reviews.push(record);
         match action {
+            ReviewAction::Confirm if address_conflict => {
+                check.status = CheckStatus::AwaitingEvidence;
+                check.reasons = vec!["ADDRESS_CONFLICT_REQUIRES_NEW_PROOF".into()];
+            }
             ReviewAction::Clear => {
                 check.status = CheckStatus::Passed;
                 check.reasons = vec!["SANCTIONS_CLEARED_BY_REVIEW".into()];

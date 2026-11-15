@@ -1,10 +1,11 @@
 [
-  {"id": "wallet", "token": "local-demo-wallet-product", "access": {"institution": "demo-bank", "product": "wallet", "role": "product", "use_cases": ["onboarding", "full_onboarding", "address_refresh"]}},
-  {"id": "lending", "token": "local-demo-lending-product", "access": {"institution": "demo-bank", "product": "lending", "role": "product", "use_cases": ["loan_application"]}},
+  {"id": "wallet", "token": "local-demo-wallet-product", "access": {"institution": "demo-bank", "product": "wallet", "role": "product", "use_cases": ["onboarding", "full_onboarding", "address_refresh", "address-pilot", "address-priority", "address-replacement"]}},
+  {"id": "lending", "token": "local-demo-lending-product", "access": {"institution": "demo-bank", "product": "lending", "role": "product", "use_cases": ["loan_application", "strict_screening"]}},
   {"id": "other-lending", "token": "local-demo-other-lending", "access": {"institution": "other-bank", "product": "lending", "role": "product", "use_cases": ["loan_application"]}},
   {"id": "wallet-reviewer", "token": "local-demo-wallet-reviewer", "access": {"institution": "demo-bank", "product": "wallet", "role": "reviewer", "use_cases": []}},
   {"id": "lending-reviewer", "token": "local-demo-lending-reviewer", "access": {"institution": "demo-bank", "product": "lending", "role": "reviewer", "use_cases": []}},
   {"id": "reviewer-alice", "token": "local-demo-reviewer-alice", "access": {"institution": "demo-bank", "product": "lending", "role": "reviewer"}},
   {"id": "reviewer-sam", "token": "local-demo-reviewer-sam", "access": {"institution": "demo-bank", "product": "lending", "role": "reviewer"}},
+  {"id": "routing-ops", "token": "local-demo-routing-operator", "access": {"role": "routing_operator", "institution": "demo-bank", "products": ["wallet", "lending"]}},
   {"id": "dashboard", "token": "local-demo-institution-observer", "access": {"role": "observer", "institution": "demo-bank", "products": ["wallet", "lending"]}}
 ]

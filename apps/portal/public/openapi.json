@@ -1241,6 +1241,171 @@
           }
         }
       }
+    },
+    "/v2/staff/provider-routing": {
+      "get": {
+        "tags": [
+          "Investigation work"
+        ],
+        "security": [
+          {
+            "callerBearer": []
+          }
+        ],
+        "operationId": "getProviderRouting",
+        "summary": "Read traffic and outstanding operations within the staff grant",
+        "responses": {
+          "200": {
+            "description": "Scoped operational report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "overrides",
+                    "recent_assignments",
+                    "share",
+                    "calls",
+                    "spend",
+                    "outstanding",
+                    "recovery",
+                    "impact",
+                    "placement"
+                  ],
+                  "properties": {
+                    "overrides": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "recent_assignments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "share": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "calls": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "spend": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "outstanding": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "recovery": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "impact": {
+                      "type": "object"
+                    },
+                    "placement": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Product403"
+          }
+        },
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "description": "Outstanding operations page, oldest first, 50 per page.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "case_id",
+            "in": "query",
+            "description": "Exact case ID for assignment history.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "Investigation work"
+        ],
+        "security": [
+          {
+            "callerBearer": []
+          }
+        ],
+        "operationId": "changeProviderTraffic",
+        "summary": "Apply a time-limited traffic override as a routing operator",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrafficChange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Effective override with version, actor and expiry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Product403"
+          },
+          "409": {
+            "description": "Stale version or conflicting command key"
+          },
+          "422": {
+            "description": "Invalid scope, mode, cap or expiry"
+          }
+        }
+      }
     }
   },
   "webhooks": {
@@ -1473,7 +1638,11 @@
               "onboarding",
               "full_onboarding",
               "address_refresh",
-              "loan_application"
+              "loan_application",
+              "address-pilot",
+              "address-priority",
+              "address-replacement",
+              "strict_screening"
             ]
           },
           "evidence": {
@@ -1637,7 +1806,8 @@
                   "provide_evidence",
                   "wait_for_provider",
                   "retry",
-                  "review"
+                  "review",
+                  "contact_provider_operations"
                 ]
               },
               {
@@ -1659,7 +1829,9 @@
               "wait_for_provider",
               "provide_evidence",
               "retry",
-              "review"
+              "review",
+              "await_original_screening",
+              "contact_provider_operations"
             ]
           },
           {
@@ -1908,6 +2080,12 @@
               "$ref": "#/components/schemas/ProductReviewerAlert"
             },
             "description": "Late screening alerts with provider provenance from the originally dispatched operation when available."
+          },
+          "screening_obligations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScreeningObligation"
+            }
           }
         }
       },
@@ -2435,7 +2613,8 @@
           "role": {
             "enum": [
               "reviewer",
-              "observer"
+              "observer",
+              "routing_operator"
             ]
           },
           "institution": {
@@ -2523,6 +2702,131 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "ScreeningObligation": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "original_operation": {
+            "type": "string"
+          },
+          "replacement_operation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "evidence_revision": {
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              null,
+              "clear",
+              "hit",
+              "not_accepted",
+              "inconclusive"
+            ]
+          },
+          "assigned_to": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "armed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "assign_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "review": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProductReviewRecord"
+              }
+            ]
+          }
+        },
+        "required": [
+          "original_operation",
+          "replacement_operation",
+          "provider",
+          "method",
+          "evidence_revision",
+          "outcome",
+          "assigned_to",
+          "armed_at",
+          "assign_at",
+          "review"
+        ]
+      },
+      "TrafficChange": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "product",
+          "provider",
+          "expected_version",
+          "mode",
+          "duration_seconds",
+          "reason"
+        ],
+        "properties": {
+          "product": {
+            "enum": [
+              "wallet"
+            ]
+          },
+          "provider": {
+            "enum": [
+              "address-a",
+              "address-b"
+            ]
+          },
+          "expected_version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "mode": {
+            "enum": [
+              "normal",
+              "paused",
+              "draining",
+              "capped",
+              "recovering"
+            ]
+          },
+          "share_cap": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 100
+          },
+          "duration_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 86400
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
           }
         }
       }

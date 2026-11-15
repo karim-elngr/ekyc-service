@@ -59,14 +59,11 @@ def check_hosted_source(link, path):
 
 
 def inspect_reliability_sources(page):
-    path = "adapters/postgres/migrations/0002_dispatch_limits.sql"
-    for slide, decisions in {
-        "limits": ("active_count >= p_max_in_flight", "recent_count >= p_per_minute"),
-        "breaker": (
-            "active_probe_expiry IS NOT NULL",
-            "finished.probe OR gate.failures + 1 >= p_threshold",
-        ),
-    }.items():
+    for slide, path, decisions in (
+        ("limits", "adapters/restate/src/attempts.rs", (".scope(pool)", ".limit_key(lane)")),
+        ("breaker", "adapters/postgres/migrations/0010_provider_contracts.sql",
+         ("rate.per_minute-rate.lookup_reserve", "circuit.probe_until", "circuit.generation=a.generation", "circuit.probe_token=p_token")),
+    ):
         advance_to(page, slide)
         figure = page.locator(f"#{slide} figure.source")
         code = figure.locator("pre code")
@@ -129,13 +126,8 @@ def controls(page):
         < ids.index("outbox")
     )
     for slide_id, details in {
-        "limits": [
-            "60 commands per calendar minute",
-            "Retry-After",
-            "4 concurrent",
-            "rolling minute",
-        ],
-        "breaker": ["2.5-second", "30-second", "3 attempts", "jitter", "5 seconds", "one probe"],
+        "limits": ["4 concurrent", "rolling minute", "Restate", "PostgreSQL"],
+        "breaker": ["Retry-After", "5 seconds", "one probe", "Scenario lab"],
         "late": [
             "original operation",
             "One investigation alert",

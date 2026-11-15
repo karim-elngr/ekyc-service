@@ -38,10 +38,14 @@ class Registry:
         with closing(sqlite3.connect(path)) as db:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS assets(ref TEXT PRIMARY KEY, record TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS provider_bindings(
+                    ref TEXT PRIMARY KEY REFERENCES assets(ref), candidates TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS subjects(tenant TEXT, subject TEXT, document_ref TEXT,
                     screening_ref TEXT, PRIMARY KEY(tenant,subject));
                 CREATE TABLE IF NOT EXISTS screening_methods(tenant TEXT,subject TEXT,method TEXT NOT NULL,
                     PRIMARY KEY(tenant,subject));
+                CREATE TABLE IF NOT EXISTS strict_screening_documents(
+                    document_ref TEXT PRIMARY KEY, replacement_scenario TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS receipts(tenant TEXT, request_key TEXT,
                     request TEXT, ref TEXT, PRIMARY KEY(tenant,request_key));
             """)
@@ -75,6 +79,9 @@ class Registry:
                           provider=identifier(body.get("provider", kind)), method=METHODS[kind], document_revision=None, portrait_revision=None)
             if kind == "document":
                 record.update(document_revision=ref, portrait_revision="portrait-" + ref)
+                if body.get("strict_screening") is True:
+                    replacement = scenario("sanctions", body.get("replacement_scenario", "pass"))
+                    db.execute("INSERT INTO strict_screening_documents VALUES(?,?)", (ref, replacement))
                 db.execute("INSERT OR REPLACE INTO subjects VALUES(?,?,?,?)",
                            (tenant, subject, ref, scenario("sanctions", body.get("screening_scenario", "pass"))))
             elif kind == "face":
@@ -85,7 +92,27 @@ class Registry:
                     document_ref = current[0] if current else None
                 doc = self.asset(db, document_ref, tenant, subject, "document")
                 record.update(document_revision=doc["revision"], portrait_revision=doc["portrait_revision"])
+            candidates = []
+            if "providers" in body:
+                providers = body["providers"]
+                if (kind != "address" or not isinstance(providers, list) or not providers
+                        or not all(p in ("address-a", "address-b") for p in providers)
+                        or len(set(providers)) != len(providers)):
+                    raise Invalid()
+                options = body.get("provider_scenarios", {})
+                if not isinstance(options, dict) or not set(options).issubset(providers):
+                    raise Invalid()
+                for provider in providers:
+                    fixture = options.get(provider, body.get("scenario", "pass"))
+                    if not supports(kind, fixture):
+                        raise Invalid()
+                    candidates.append(dict(record, provider=provider,
+                                           method="address_verification_" + provider[-1],
+                                           provider_ref=f"demo:{provider}:{fixture}"))
+                record = candidates[0]
             db.execute("INSERT INTO assets VALUES(?,?)", (ref, json.dumps(record)))
+            if candidates:
+                db.execute("INSERT INTO provider_bindings VALUES(?,?)", (ref, json.dumps(candidates)))
             db.execute("INSERT INTO receipts VALUES(?,?,?,?)", (tenant, key, request, ref))
             return {"evidence_ref": ref}
 
@@ -100,7 +127,18 @@ class Registry:
                        (body["institution"], body["subject_ref"], identifier(body.get("method", METHODS["sanctions"]))))
         return {"updated": True}
 
-    def resolve(self, body):
+    @staticmethod
+    def screening_candidates(db, tenant, subject, screening):
+        approved = db.execute("""SELECT d.replacement_scenario FROM strict_screening_documents d
+            JOIN subjects s ON s.document_ref=d.document_ref
+            WHERE s.tenant=? AND s.subject=? AND s.document_ref=?""",
+            (tenant, subject, screening["document_revision"])).fetchone()
+        if not approved:
+            return [screening]
+        return [dict(screening, provider=provider, provider_ref=f"demo:{provider}:{locator.split(':', 1)[1]}")
+                for provider, locator in [("sanctions-a", screening["provider_ref"]), ("sanctions-b", approved[0])]]
+
+    def resolve(self, body, version=2):
         tenant, subject = identifier(body.get("institution")), identifier(body.get("subject_ref"))
         supplied = body.get("evidence")
         if not isinstance(supplied, dict) or not set(supplied) <= {"document", "face", "address"}:
@@ -117,8 +155,19 @@ class Registry:
                                       (tenant, subject)).fetchone()
                 screening = dict(doc, kind="sanctions", evidence_ref="identity-" + doc["revision"],
                                  method=override[0] if override else METHODS["sanctions"], provider="sanctions", provider_ref=row[1])
-            return dict(evidence=evidence, current_document_revision=doc and doc["revision"],
+            snapshot = dict(evidence=evidence, current_document_revision=doc and doc["revision"],
                         current_portrait_revision=doc and doc["portrait_revision"], screening=screening)
+
+            if version == 3:
+                candidates = {}
+                for kind, item in evidence.items():
+                    bindings = db.execute("SELECT candidates FROM provider_bindings WHERE ref=?",
+                                          (item["evidence_ref"],)).fetchone()
+                    candidates[kind] = json.loads(bindings[0]) if bindings else [item]
+                if screening:
+                    candidates["sanctions"] = self.screening_candidates(db, tenant, subject, screening)
+                snapshot.update(version=3, provider_candidates=candidates)
+            return snapshot
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -145,11 +194,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(201, self.server.registry.issue(self.headers.get("Idempotency-Key"), body))
             elif self.path == "/demo/screening":
                 self.reply(200, self.server.registry.set_screening(body))
-            elif self.path == "/v2/resolve":
+            elif self.path in ("/v2/resolve", "/v3/resolve"):
                 token = self.headers.get("Authorization", "").encode()
                 if not hmac.compare_digest(token, self.server.auth):
                     return self.reply(401, {})
-                self.reply(200, self.server.registry.resolve(body))
+                v3 = (self.path == "/v3/resolve" or self.headers.get("Accept") ==
+                      "application/vnd.ekyc.issuer.v3+json")
+                self.reply(200, self.server.registry.resolve(body, 3 if v3 else 2))
             else:
                 self.reply(404, {})
         except Conflict:

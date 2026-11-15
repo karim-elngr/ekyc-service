@@ -128,6 +128,19 @@ impl ProductCheck {
             (CheckKind::Sanctions, CheckStatus::AwaitingEvidence) => Some("verify_document"),
             (_, CheckStatus::AwaitingEvidence) => Some("provide_evidence"),
             (_, CheckStatus::Pending) => Some("wait_for_provider"),
+            (CheckKind::Address, CheckStatus::Blocked)
+                if self.reasons.iter().any(|r| {
+                    matches!(
+                        r.as_str(),
+                        "ADDRESS_PROVIDER_RECOVERY_REQUIRED"
+                            | "ADDRESS_ORIGINAL_OUTSTANDING"
+                            | "ADDRESS_RESULT_UNAVAILABLE"
+                            | "NO_AUTHORIZED_PROVIDER_ROUTE"
+                    )
+                }) =>
+            {
+                Some("contact_provider_operations")
+            }
             (_, CheckStatus::Blocked) => Some("retry"),
             (_, CheckStatus::Review) => Some("review"),
             _ => None,

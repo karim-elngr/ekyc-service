@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Institution evidence issuer",
-    "version": "2.0.0",
+    "version": "3.0.0",
     "description": "Implemented by the institution's evidence service. The worker resolves immutable references for one institution and customer and checks the returned method and vendor against its pinned configuration."
   },
   "paths": {
@@ -68,7 +68,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ResolveResponse"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ResolveResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CandidateResponse"
+                    }
+                  ]
                 },
                 "examples": {
                   "newSubject": {
@@ -184,6 +191,66 @@
           },
           "401": {
             "description": "The issuer rejected the worker credential."
+          }
+        },
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Accept",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The worker requests application/vnd.ekyc.issuer.v3+json to receive candidates. An older issuer may return the v2 single-binding payload."
+          }
+        ]
+      }
+    },
+    "/v3/resolve": {
+      "post": {
+        "operationId": "resolveEvidenceCandidates",
+        "security": [
+          {
+            "issuerBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Institution-authorized candidates for the requested revisions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown, foreign, unavailable for this subject, or mismatched reference. No partial response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuerError"
+                },
+                "examples": {
+                  "bindingMismatch": {
+                    "value": {
+                      "error": "invalid_evidence"
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -372,6 +439,99 @@
         "required": [
           "error"
         ]
+      },
+      "CandidateResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "evidence",
+          "current_document_revision",
+          "current_portrait_revision",
+          "screening",
+          "version",
+          "provider_candidates"
+        ],
+        "properties": {
+          "evidence": {
+            "type": "object",
+            "properties": {
+              "document": {
+                "$ref": "#/components/schemas/Asset"
+              },
+              "face": {
+                "$ref": "#/components/schemas/Asset"
+              },
+              "address": {
+                "$ref": "#/components/schemas/Asset"
+              }
+            },
+            "additionalProperties": false
+          },
+          "current_document_revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "current_portrait_revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "screening": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Asset"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version": {
+            "const": 3
+          },
+          "provider_candidates": {
+            "type": "object",
+            "description": "One list per returned asset including screening. All alternatives identify the same institution, subject, immutable asset, kind and revision. Each provider appears once.",
+            "properties": {
+              "document": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 16,
+                "items": {
+                  "$ref": "#/components/schemas/Asset"
+                }
+              },
+              "face": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 16,
+                "items": {
+                  "$ref": "#/components/schemas/Asset"
+                }
+              },
+              "address": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 16,
+                "items": {
+                  "$ref": "#/components/schemas/Asset"
+                }
+              },
+              "sanctions": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 16,
+                "items": {
+                  "$ref": "#/components/schemas/Asset"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
       }
     }
   }

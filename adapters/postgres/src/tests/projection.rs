@@ -397,3 +397,213 @@ async fn reviewer_provenance_survives_switching_vendors_for_same_kind(
     }
     Ok(())
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn strict_hold_serializes_approval_and_investigation(pool: PgPool) -> Result<(), Error> {
+    use ekyc_domain::product::{Policy, ScreenOutcome};
+    let store = Store { pool };
+    for approve_first in [false, true] {
+        let id = format!("strict-race-{approve_first}");
+        let mut case = open(&id, "wallet", &[CheckKind::Document], &[], now());
+        case.policy = Policy::load("lending", "strict_screening").unwrap();
+        case.checks.remove(&CheckKind::Face);
+        let mut a = case.bindings.screening.clone().unwrap();
+        a.provider = "sanctions-a".into();
+        let mut b = a.clone();
+        b.provider = "sanctions-b".into();
+        case.bindings
+            .provider_candidates
+            .insert(CheckKind::Sanctions, vec![a, b]);
+        store.publish_product(&case).await?;
+        settle(
+            &mut case,
+            CheckKind::Document,
+            passing(CheckKind::Document),
+            now(),
+        );
+        let armed = case.clone();
+        let original = case.checks[&CheckKind::Sanctions]
+            .operation_id
+            .clone()
+            .unwrap();
+        settle(
+            &mut case,
+            CheckKind::Sanctions,
+            Observation::Unavailable,
+            now(),
+        );
+        settle(
+            &mut case,
+            CheckKind::Sanctions,
+            passing(CheckKind::Sanctions),
+            now(),
+        );
+        if approve_first {
+            // A different case can reject on B before A answers. Its immutable decision
+            // still needs a newly attributable investigation for the retained A result.
+            let mut closed = armed.clone();
+            closed.case_id.push_str("-closed");
+            // Keep globally unique operation IDs when constructing an independent case.
+            let mut fixture = open(
+                &closed.case_id,
+                "wallet",
+                &[CheckKind::Document],
+                &[],
+                now(),
+            );
+            fixture.policy = closed.policy.clone();
+            fixture.bindings = closed.bindings.clone();
+            fixture.checks.remove(&CheckKind::Face);
+            settle(
+                &mut fixture,
+                CheckKind::Document,
+                passing(CheckKind::Document),
+                now(),
+            );
+            let pending = fixture.checks[&CheckKind::Sanctions]
+                .operation_id
+                .clone()
+                .unwrap();
+            store.publish_product(&fixture).await?;
+            settle(
+                &mut fixture,
+                CheckKind::Sanctions,
+                Observation::Unavailable,
+                now(),
+            );
+            settle(
+                &mut fixture,
+                CheckKind::Sanctions,
+                Observation::Sanctions { hit: true },
+                now(),
+            );
+            fixture
+                .review(
+                    CheckKind::Sanctions,
+                    ReviewAction::Confirm,
+                    "reviewer",
+                    "confirmed replacement",
+                    "case-file",
+                    now(),
+                )
+                .unwrap();
+            store.publish_product(&fixture).await?;
+            let frozen = fixture.revision;
+            store
+                .closed_screen_lookup(&fixture.case_id, &pending, ScreenOutcome::Hit, now(), now())
+                .await?;
+            let details = store
+                .product_review_details(&fixture.case_id, "institution-a", "lending")
+                .await?
+                .unwrap();
+            assert_eq!(details["version"], frozen);
+            assert_eq!(details["state"], "REJECTED");
+            let original_alerts = details["alerts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|alert| alert["operation_id"] == pending)
+                .count();
+            assert_eq!(original_alerts, 1);
+            assert!(details["screening_obligations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|h| h["original_operation"] == pending && h["outcome"] == "hit"));
+        }
+        let mut proposal = case.clone();
+        // Simulate a stale writer which only sees the B pass. Exercise both lock orders.
+        proposal.screen_obligations.clear();
+        proposal.state = CaseState::Approved;
+        let (left, right) = if approve_first {
+            (&proposal, &armed)
+        } else {
+            (&armed, &proposal)
+        };
+        let (one, two) = tokio::join!(
+            store.commit_assessment(left),
+            store.commit_assessment(right)
+        );
+        one?;
+        two?;
+        case.revision += 1;
+        store.publish_product(&case).await?;
+        case.record_screen_lookup(&original, ScreenOutcome::Hit, now(), now(), now())
+            .unwrap();
+        let (one, two) = tokio::join!(
+            store.commit_assessment(&case),
+            store.commit_assessment(&case)
+        );
+        one?;
+        two?;
+        let counts: (i64,i64,i64,i64) = sqlx::query_as("SELECT
+            (SELECT count(*) FROM product_case_revision WHERE case_id=$1 AND assessment->>'state'='APPROVED'),
+            (SELECT count(*) FROM decision_outbox WHERE product_case_id=$1 AND payload->>'state'='APPROVED'),
+            (SELECT count(*) FROM decision_outbox WHERE product_case_id=$1 AND payload->>'event_type'='ekyc.screening.alert.v2'),
+            (SELECT count(*) FROM staff_current_work WHERE case_id=$1 AND operation_id=$2)")
+            .bind(&id).bind(&original).fetch_one(&store.pool).await?;
+        assert_eq!(counts, (0, 0, 1, 1));
+    }
+    Ok(())
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn strict_unsent_certification_fences_future_submits_and_preserves_possible_sends(
+    pool: PgPool,
+) -> Result<(), Error> {
+    let store = Store { pool };
+    for unsent in [false, true] {
+        let id = format!("strict-fence-{unsent}");
+        let mut case = open(&id, "wallet", &[CheckKind::Document], &[], now());
+        case.policy = ekyc_domain::product::Policy::load("lending", "strict_screening").unwrap();
+        case.checks.remove(&CheckKind::Face);
+        let mut a = case.bindings.screening.clone().unwrap();
+        a.provider = "sanctions-a".into();
+        let mut b = a.clone();
+        b.provider = "sanctions-b".into();
+        case.bindings
+            .provider_candidates
+            .insert(CheckKind::Sanctions, vec![a, b]);
+        settle(
+            &mut case,
+            CheckKind::Document,
+            passing(CheckKind::Document),
+            now(),
+        );
+        store.publish_product(&case).await?;
+        store
+            .assign_route(
+                &case,
+                CheckKind::Sanctions,
+                chrono::Utc::now().timestamp_millis() + 26_000,
+                false,
+            )
+            .await?;
+        let original = case.checks[&CheckKind::Sanctions]
+            .operation_id
+            .clone()
+            .unwrap();
+        if unsent {
+            assert!(store.fence_unsent_screen(&id, &original).await?);
+            assert!(store.fence_unsent_screen(&id, &original).await?);
+            let fence: (bool, String) = sqlx::query_as(
+                "SELECT retired,status FROM provider_route_selection WHERE operation_id=$1",
+            )
+            .bind(&original)
+            .fetch_one(&store.pool)
+            .await?;
+            assert_eq!(fence, (true, "not_accepted".into()));
+            let stale_worker: Option<String> =
+                sqlx::query_scalar("SELECT ekyc_check_route($1,'submit',true)")
+                    .bind(&original)
+                    .fetch_one(&store.pool)
+                    .await?;
+            assert_eq!(stale_worker.as_deref(), Some("retired"));
+        } else {
+            sqlx::query("UPDATE provider_route_selection SET possible_send=true,status='outstanding' WHERE operation_id=$1")
+                .bind(&original).execute(&store.pool).await?;
+            assert!(!store.fence_unsent_screen(&id, &original).await?);
+        }
+    }
+    Ok(())
+}

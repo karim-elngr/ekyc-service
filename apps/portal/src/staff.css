@@ -60,3 +60,10 @@
   border-radius: 8px;
   padding: 10px 16px;
 }
+
+.provider-routing li, .provider-routing p {
+  overflow-wrap: anywhere;
+}
+.provider-routing li + li {
+  margin-top: .75rem;
+}

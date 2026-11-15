@@ -1,34 +1,25 @@
 """Check the served Liam schema against the application tables and exercise table search."""
 
 import os
+import re
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from playwright.sync_api import expect, sync_playwright
 
 
+# export_schema --check compares this file byte-for-byte with the running catalog.
+DDL = (Path(__file__).resolve().parents[1] / "apps/portal/schema/structure.sql").read_text()
 COLUMN_COUNTS = {
-    "caller_quota": 3,
-    "decision_outbox": 9,
-    "product_case": 9,
-    "product_case_revision": 6,
-    "product_fact": 6,
-    "provider_gate": 5,
-    "provider_lease": 7,
-    "staff_work_acknowledgement": 7,
-    "subject_fact_generation": 3,
+    table: sum(1 for line in body.splitlines() if line.strip() and not line.lstrip().startswith("CONSTRAINT "))
+    for table, body in re.findall(r"CREATE TABLE public\.(\w+) \(\n(.*?)\n\);", DDL, re.S)
 }
-
 FOREIGN_KEYS = [
-    (
-        "decision_outbox",
-        ("product_case_id", "version"),
-        "product_case_revision",
-        ("case_id", "version"),
-    ),
-    ("product_case_revision", ("case_id",), "product_case", ("case_id",)),
-    ("product_fact", ("origin_case_id",), "product_case", ("case_id",)),
-    ("provider_lease", ("provider",), "provider_gate", ("provider",)),
-    ("staff_work_acknowledgement", ("case_id",), "product_case", ("case_id",)),
+    (table, tuple(cols.split(", ")), target, tuple(refs.split(", ")))
+    for table, cols, target, refs in re.findall(
+        r"ALTER TABLE ONLY public\.(\w+)\s+ADD CONSTRAINT \w+ FOREIGN KEY \(([^)]+)\) "
+        r"REFERENCES public\.(\w+)\(([^)]+)\)", DDL
+    )
 ]
 
 
@@ -107,5 +98,5 @@ if __name__ == "__main__":
         finally:
             browser.close()
     print(
-        "Liam displayed 9 tables, 55 columns and 5 foreign keys. Local table search opened the outbox and its two-column revision relationship."
+        f"Liam displayed {len(COLUMN_COUNTS)} tables, {sum(COLUMN_COUNTS.values())} columns and {len(FOREIGN_KEYS)} foreign keys. Local search opened the outbox revision relationship."
     )

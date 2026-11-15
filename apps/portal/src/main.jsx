@@ -80,7 +80,7 @@ function App() {
           )}
         </header>
         {page === "lab" ? (
-          <ScenarioLab changed={refresh} />
+          <ScenarioLab key={params.preset || "default"} changed={refresh} initialPreset={params.preset} />
         ) : (
           <Reports
             page={page}

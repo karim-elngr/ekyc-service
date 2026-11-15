@@ -2,6 +2,8 @@
 
 Each case belongs to one product and one customer. The credential determines the institution, product and role. The wallet offers `onboarding`, `full_onboarding` and `address_refresh`. Lending accepts `loan_application` directly or after a wallet verification.
 
+The wallet also has an opt-in two-vendor address pilot. Open [Two address vendors](/#lab?preset=routing) to issue one authorized proof revision and dispatch a real check. Routing staff can inspect the assignment or change traffic under **Staff workspace → Provider routing**. Lending’s `strict_screening` policy holds approval while an accepted original screen remains unresolved.
+
 Open the [scenario lab](/#lab) to try the workflows using synthetic evidence and the portal's server-side credentials. In Scalar, select an operation and enter your own authorized bearer credential to test the API.
 
 1. Obtain issuer references for the customer. A face capture binds to the current document portrait. Screening uses the verified identity. 

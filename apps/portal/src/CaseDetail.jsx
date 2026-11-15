@@ -286,9 +286,10 @@ export function CaseDetail({
   const task = view.checks.find(
     (c) => c.status === "REVIEW" && c.kind === "sanctions",
   );
-  const taskId = task?.operation_id || "";
+  const originalReview = view.reasons?.some((reason) => reason.code === "ORIGINAL_SCREENING_REVIEW");
+  const taskId = task?.operation_id || (originalReview ? "original-screening" : "");
   const reviewOpen =
-    reviewChoice?.operation === taskId ? reviewChoice.open : Boolean(task);
+    reviewChoice?.operation === taskId ? reviewChoice.open : Boolean(taskId);
   const passed = view.checks.filter((c) => c.status === "PASSED").length;
   const title =
     heading ||
@@ -456,7 +457,7 @@ export function CaseDetail({
           <Fold
             title="Reviewer handoff"
             subtitle={
-              task
+              taskId
                 ? "Screening disposition required"
                 : "Evidence, alerts and recorded decisions"
             }

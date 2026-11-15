@@ -3,6 +3,10 @@ export const useCases = {
   onboarding: "Wallet onboarding",
   full_onboarding: "Full onboarding",
   address_refresh: "Address refresh",
+  "address-pilot": "Address routing pilot",
+  "address-priority": "Address primary and backup",
+  "address-replacement": "Address replacement",
+  strict_screening: "Strict sanctions screening",
   loan_application: "Loan application",
 };
 export const kinds = {
@@ -33,11 +37,11 @@ export const statuses = {
   FAILED: "Failed",
 };
 export const productFor = (useCase) =>
-  useCase === "loan_application" ? "lending" : "wallet";
+  ["loan_application","strict_screening"].includes(useCase) ? "lending" : "wallet";
 export const terminal = (view) =>
   ["APPROVED", "REJECTED"].includes(view?.state);
 export const checkScope = (useCase) =>
-  useCase === "address_refresh"
+  (useCase === "address_refresh" || useCase.startsWith("address-"))
     ? ["address"]
     : useCase === "onboarding"
       ? ["document", "face", "sanctions"]

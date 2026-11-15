@@ -41,6 +41,22 @@ services:
     <<: *provider
     command: ["sanctions"]
     volumes: [sanctions_demo:/data]
+  address-a:
+    <<: *provider
+    command: ["address", "--vendor", "address-a"]
+    volumes: [address_a_demo:/data]
+  address-b:
+    <<: *provider
+    command: ["address", "--vendor", "address-b"]
+    volumes: [address_b_demo:/data]
+  sanctions-a:
+    <<: *provider
+    command: ["sanctions", "--vendor", "sanctions-a"]
+    volumes: [sanctions_a_demo:/data]
+  sanctions-b:
+    <<: *provider
+    command: ["sanctions", "--vendor", "sanctions-b"]
+    volumes: [sanctions_b_demo:/data]
   issuer:
     image: python:3.12-alpine
     volumes: ["./mocks:/mock:ro", "issuerdata:/data"]
@@ -54,9 +70,10 @@ services:
   worker:
     <<: *rust
     command: ["ekyc-worker"]
+    volumes: ["./config/provider-contracts.json:/config/provider-contracts.json:ro"]
     networks:
       default:
-        aliases: [worker-cases-iteration1]
+        aliases: [worker-cases-routing1]
     depends_on:
       postgres: {condition: service_healthy}
       issuer: {condition: service_started}
@@ -73,6 +90,10 @@ services:
       SANCTIONS_URL: &sanctions_url http://sanctions:8080
       EKYC_EVIDENCE_URL: http://issuer:9805
       EKYC_EVIDENCE_TOKEN: *issuer_token
+      EKYC_PROVIDER_CATALOG: '{"document":{"document":"http://document:8080"},"face":{"face":"http://face:8080"},"address":{"address":"http://address:8080","address-a":"http://address-a:8080","address-b":"http://address-b:8080"},"sanctions":{"sanctions":"http://sanctions:8080","sanctions-a":"http://sanctions-a:8080","sanctions-b":"http://sanctions-b:8080"}}'
+      EKYC_PROVIDER_CONTRACTS_FILE: /config/provider-contracts.json
+      RESTATE_ADMIN_URL: http://restate:9070
+      EKYC_ROUTING_INSTITUTION: demo-bank
       MAX_ATTEMPTS: "3"
       CASE_DEADLINE_MS: "30000"
       CHECK_TIMEOUT_MS: "2500"
@@ -81,8 +102,10 @@ services:
   register:
     image: python:3.12-alpine
     depends_on: [restate, worker]
-    volumes: ["./scripts/register.py:/register.py:ro"]
-    command: ["python3", "/register.py", "http://restate:9070", "http://worker-cases-iteration1:9080"]
+    environment:
+      EKYC_PROVIDER_CONTRACTS_FILE: /config/provider-contracts.json
+    volumes: ["./scripts/register.py:/register.py:ro","./config/provider-contracts.json:/config/provider-contracts.json:ro"]
+    command: ["python3", "/register.py", "http://restate:9070", "http://worker-cases-routing1:9080"]
   api:
     <<: *rust
     command: ["ekyc-api"]
@@ -142,6 +165,10 @@ volumes:
   address_demo: {}
   sanctions_demo: {}
   issuerdata: {}
+  address_a_demo: {}
+  address_b_demo: {}
+  sanctions_a_demo: {}
+  sanctions_b_demo: {}
   pgdata: {}
   restatedata: {}
   sinkdata: {}

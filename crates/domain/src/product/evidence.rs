@@ -24,12 +24,41 @@ pub struct BoundEvidence {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BindingSnapshot {
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub provider_candidates: std::collections::BTreeMap<CheckKind, Vec<BoundEvidence>>,
     pub current_document_revision: Option<String>,
     pub current_portrait_revision: Option<String>,
     pub screening: Option<BoundEvidence>,
 }
 
 impl BoundEvidence {
+    /// Each immutable capture gets a distinct requirement, including issuers which restart
+    /// revision numbers per asset. Escaping keeps opaque issuer delimiters unambiguous.
+    pub fn requirement_id(&self, case: &str) -> String {
+        let escape = |value: &str| {
+            value
+                .replace('%', "%25")
+                .replace('/', "%2F")
+                .replace('#', "%23")
+        };
+        let mut id = format!("{}/{}/{}", case, self.kind.as_str(), escape(&self.revision));
+        if self.evidence_ref != self.revision {
+            id.push('#');
+            id.push_str(&escape(&self.evidence_ref));
+        }
+        id
+    }
+
+    pub fn same_capture(&self, other: &Self) -> bool {
+        self.tenant_id == other.tenant_id
+            && self.subject_ref == other.subject_ref
+            && self.kind == other.kind
+            && self.evidence_ref == other.evidence_ref
+            && self.revision == other.revision
+            && self.document_revision == other.document_revision
+            && self.portrait_revision == other.portrait_revision
+    }
+
     /// An issuer may rotate the vendor locator for an unchanged immutable asset.
     pub(super) fn same_screening_identity(&self, current: &Self) -> bool {
         self.evidence_ref == current.evidence_ref
@@ -50,6 +79,7 @@ impl BoundEvidence {
             || self.subject_ref != subject
             || self.kind != rule.kind
             || !rule.methods.contains(&self.method)
+            || rule.routing.as_ref().is_some_and(|r| !r.approves(self))
             || ![
                 &self.evidence_ref,
                 &self.revision,

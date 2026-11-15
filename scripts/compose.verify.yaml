@@ -1,5 +1,8 @@
 # The verifier supplies loopback-only ephemeral ports for direct test observations.
 services:
+  restate:
+    environment:
+      RESTATE_ROCKSDB_TOTAL_MEMORY_SIZE: "256 MiB"
   postgres:
     ports: ["127.0.0.1:${EKYC_PG_PORT:?}:5432"]
   document:
@@ -10,6 +13,14 @@ services:
     ports: ["127.0.0.1:${EKYC_ADDRESS_PORT:?}:8080"]
   sanctions:
     ports: ["127.0.0.1:${EKYC_SANCTIONS_PORT:?}:8080"]
+  address-a:
+    ports: ["127.0.0.1:${EKYC_ADDRESS_A_PORT:?}:8080"]
+  address-b:
+    ports: ["127.0.0.1:${EKYC_ADDRESS_B_PORT:?}:8080"]
+  sanctions-a:
+    ports: ["127.0.0.1:${EKYC_SANCTIONS_A_PORT:?}:8080"]
+  sanctions-b:
+    ports: ["127.0.0.1:${EKYC_SANCTIONS_B_PORT:?}:8080"]
   api:
     environment:
       ADMISSION_PER_MINUTE: "1000"

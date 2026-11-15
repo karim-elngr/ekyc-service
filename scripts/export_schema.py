@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SNAPSHOT = ROOT / "apps/portal/schema/structure.sql"
 
 
-def export_schema(engine, project):
+def export_schema(engine, project, database="ekyc"):
     command = [engine, "compose", "-f", str(ROOT / "compose.yaml")]
     if project:
         command.extend(["-p", project])
@@ -22,7 +22,7 @@ def export_schema(engine, project):
             "postgres",
             "pg_dump",
             "--username=ekyc",
-            "--dbname=ekyc",
+            "--dbname=" + database,
             "--schema-only",
             "--schema=public",
             "--exclude-table=public._sqlx_migrations",
@@ -79,11 +79,12 @@ def main():
         action="store_true",
         help="Compare the snapshot with the running database and report drift without writing.",
     )
+    parser.add_argument("--database", default="ekyc", help="Database containing the migrated schema.")
     args = parser.parse_args()
     engine = args.engine or shutil.which("docker") or shutil.which("podman")
     if not engine:
         parser.error("Install Docker Compose or Podman with a Compose provider.")
-    schema = export_schema(engine, args.project)
+    schema = export_schema(engine, args.project, args.database)
     if args.output.is_file() and args.output.read_text(encoding="utf-8") == schema:
         print(f"Current schema snapshot: {args.output}")
         return

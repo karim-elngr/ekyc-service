@@ -7,27 +7,28 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use std::collections::BTreeMap;
 
+#[derive(Clone)]
 pub(crate) struct InteractiveMocks {
     pub transport: Transport,
     pub registrations: BTreeMap<CheckKind, String>,
 }
 
-#[derive(Serialize)]
-struct Registration {
-    case_id: String,
-    operation_id: String,
-    awakeable_id: String,
-    invocation_id: String,
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct Registration {
+    pub case_id: String,
+    pub operation_id: String,
+    pub awakeable_id: String,
+    pub invocation_id: String,
 }
 
 #[derive(Deserialize)]
-struct Callback {
+pub(crate) struct Callback {
     status: u16,
     body: Box<RawValue>,
 }
 
 impl Callback {
-    fn observation(&self, provider: &dyn Provider) -> Option<Evaluated<Observation>> {
+    pub fn observation(&self, provider: &dyn Provider) -> Option<Evaluated<Observation>> {
         if (200..300).contains(&self.status) {
             return provider.decode(self.body.get().as_bytes()).ok();
         }

@@ -1,0 +1,45 @@
+{
+  "case_id": "shadow-demo-case",
+  "institution": "demo-bank",
+  "subject_ref": "synthetic-shadow",
+  "use_case": "address-pilot",
+  "observed_provider": "address",
+  "asset": {
+    "tenant_id": "demo-bank",
+    "subject_ref": "synthetic-shadow",
+    "kind": "address",
+    "evidence_ref": "demo-proof-v1",
+    "revision": "demo-proof-v1",
+    "provider": "address-a",
+    "method": "address_verification_a",
+    "provider_ref": "demo:address-a:pass",
+    "document_revision": null,
+    "portrait_revision": null
+  },
+  "candidates": [
+    {
+      "tenant_id": "demo-bank",
+      "subject_ref": "synthetic-shadow",
+      "kind": "address",
+      "evidence_ref": "demo-proof-v1",
+      "revision": "demo-proof-v1",
+      "provider": "address-a",
+      "method": "address_verification_a",
+      "provider_ref": "demo:address-a:pass",
+      "document_revision": null,
+      "portrait_revision": null
+    },
+    {
+      "tenant_id": "demo-bank",
+      "subject_ref": "synthetic-shadow",
+      "kind": "address",
+      "evidence_ref": "demo-proof-v1",
+      "revision": "demo-proof-v1",
+      "provider": "address-b",
+      "method": "address_verification_b",
+      "provider_ref": "demo:address-b:pass",
+      "document_revision": null,
+      "portrait_revision": null
+    }
+  ]
+}

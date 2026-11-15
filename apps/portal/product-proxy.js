@@ -46,6 +46,11 @@ function permitted(method, raw, role) {
 export function permittedStaffRequest(method, raw) {
   const [path, search = ""] = raw.split("?");
   if (raw.split("?").length > 2) return false;
+  if (path === "/v2/staff/provider-routing") {
+    const params = new URLSearchParams(search);
+    return (method === "PUT" && !search) || (method === "GET" && [...params.keys()].every(
+      key => ["page", "case_id"].includes(key) && params.getAll(key).length === 1));
+  }
   if (path === "/v2/staff/session") return method === "GET" && !search;
   if (path === "/v2/investigations/acknowledgement")
     return method === "PUT" && !search;
@@ -180,6 +185,7 @@ export async function issueDemoEvidence(req, res, path, issuer) {
             "scenario",
             "document_ref",
             "screening_scenario",
+            "providers",
           ];
     if (
       !data ||

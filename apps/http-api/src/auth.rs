@@ -28,6 +28,10 @@ pub enum Access {
         #[serde(default)]
         use_cases: Vec<String>,
     },
+    RoutingOperator {
+        institution: String,
+        products: Vec<String>,
+    },
     Observer {
         institution: String,
         products: Vec<String>,
@@ -53,7 +57,11 @@ impl Access {
                 product,
                 use_cases,
             } => valid_slug(institution) && valid_slug(product) && use_cases.is_empty(),
-            Self::Observer {
+            Self::RoutingOperator {
+                institution,
+                products,
+            }
+            | Self::Observer {
                 institution,
                 products,
             } => valid_slug(institution) && valid_set(products),
@@ -80,7 +88,11 @@ impl Caller {
                 product,
                 ..
             } => (institution, vec![product.clone()], None),
-            Access::Observer {
+            Access::RoutingOperator {
+                institution,
+                products,
+            }
+            | Access::Observer {
                 institution,
                 products,
             } => (institution, products.clone(), None),

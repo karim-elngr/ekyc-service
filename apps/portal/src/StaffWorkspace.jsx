@@ -1,3 +1,4 @@
+import { ProviderRouting } from "./ProviderRouting";
 import { useEffect, useState } from "react";
 import { api, useRead } from "./api";
 import { dateTime, decisionLabel, href, products } from "./cases";
@@ -29,7 +30,7 @@ function SignIn({ signedIn, demo }) {
     } catch (err) {
       setError(
         err.status === 401 || err.status === 403
-          ? "Use a personal reviewer or observer credential issued by your institution."
+          ? "Use a personal staff credential issued by your institution."
           : err.message,
       );
     } finally {
@@ -215,7 +216,7 @@ export function StaffWorkspace({ params, demo }) {
   const refresh = () => setRevision((n) => n + 1);
   const reviewer = staff?.role === "reviewer";
   const screen =
-    reviewer && !["overview", "cases"].includes(params.screen)
+    params.screen === "routing" || (!params.screen && staff?.role==="routing_operator") ? "routing" : reviewer && !["overview", "cases"].includes(params.screen)
       ? "investigations"
       : params.screen === "overview"
         ? "overview"
@@ -234,7 +235,7 @@ export function StaffWorkspace({ params, demo }) {
       <header className="staff-header">
         <div>
           <h1>
-            {screen === "investigations"
+            {screen === "routing" ? "Provider routing" : screen === "investigations"
               ? "Investigations"
               : screen === "overview"
                 ? "Verification overview"
@@ -262,6 +263,7 @@ export function StaffWorkspace({ params, demo }) {
           ...(reviewer ? { investigations: "Investigations" } : {}),
           overview: "Overview",
           cases: "Cases",
+          routing: "Provider routing",
         }).map(([key, label]) => (
           <a
             className="text-button"
@@ -273,7 +275,7 @@ export function StaffWorkspace({ params, demo }) {
           </a>
         ))}
       </nav>
-      {screen === "investigations" ? (
+      {screen === "routing" ? <ProviderRouting staff={staff}/> : screen === "investigations" ? (
         <WorkQueue
           staff={staff}
           revision={revision}
